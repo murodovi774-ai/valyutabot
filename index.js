@@ -293,7 +293,7 @@ async function sendRate(ctx, code) {
   if (diff > 0) diffText = await t(userId, "up", { amount: formatMoney(diff) });
   else if (diff < 0) diffText = await t(userId, "down", { amount: formatMoney(Math.abs(diff)) });
 
-  const msg = await t(userId, "rate_msg", { flag, code, rate: formatMoney(rate), diffText, time: getTimeStr() });
+  const msg = await t(userId, "rate_msg", { flag, code, rate: formatMoney(rate), diffText, time: currency.Date });
   const markup = Markup.inlineKeyboard([
     [Markup.button.callback(await t(userId, "refresh"), `rate_${code}`)],
     [Markup.button.callback("⬅️", "main_menu")]
