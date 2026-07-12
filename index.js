@@ -276,9 +276,9 @@ async function sendRate(ctx, code) {
 }
 
 bot.action(/rate_(USD|EUR|RUB)/, (ctx) => sendRate(ctx, ctx.match[1]));
-bot.hears(/(🇺🇸|USD)/i, (ctx) => sendRate(ctx, "USD"));
-bot.hears(/(🇪🇺|EUR)/i, (ctx) => sendRate(ctx, "EUR"));
-bot.hears(/(🇷🇺|RUB)/i, (ctx) => sendRate(ctx, "RUB"));
+bot.hears(/^(🇺🇸 USD|🇺🇸|USD)$/i, (ctx) => sendRate(ctx, "USD"));
+bot.hears(/^(🇪🇺 EUR|🇪🇺|EUR)$/i, (ctx) => sendRate(ctx, "EUR"));
+bot.hears(/^(🇷🇺 RUB|🇷🇺|RUB)$/i, (ctx) => sendRate(ctx, "RUB"));
 
 let dollaruzCache = null;
 let lastDollaruzFetch = null;
@@ -325,7 +325,7 @@ async function sendBanks(ctx) {
   }
 }
 bot.action("banks", sendBanks);
-bot.hears(/(🏦|Bank)/i, sendBanks);
+bot.hears(/^(🏦 Banklar|🏦|Bank)$/i, sendBanks);
 
 async function sendGold(ctx) {
   const userId = ctx.from.id;
@@ -350,7 +350,7 @@ async function sendGold(ctx) {
   }
 }
 bot.action("gold", sendGold);
-bot.hears(/(🪙 Oltin|🪙 Золото|🪙 Gold|Oltin|Золото)/i, sendGold);
+bot.hears(/^(🪙 Oltin|🪙 Золото|🪙 Gold|Oltin|Золото)$/i, sendGold);
 
 async function sendCrypto(ctx) {
   const userId = ctx.from.id;
@@ -376,7 +376,7 @@ async function sendCrypto(ctx) {
   }
 }
 bot.action("crypto", sendCrypto);
-bot.hears(/(🪙 Kripto|🪙 Крипто|🪙 Crypto|Kripto|Крипто)/i, sendCrypto);
+bot.hears(/^(🪙 Kripto|🪙 Крипто|🪙 Crypto|Kripto|Крипто)$/i, sendCrypto);
 
 async function sendChartMenu(ctx) {
   const userId = ctx.from.id;
@@ -393,7 +393,7 @@ async function sendChartMenu(ctx) {
   }
 }
 bot.action("chart_menu", sendChartMenu);
-bot.hears(/(📊|Grafik|График|Chart)/i, sendChartMenu);
+bot.hears(/^(📊 Grafik|📊 График|📊 Chart|📊|Grafik|График|Chart)$/i, sendChartMenu);
 
 bot.action("chart_USD", async (ctx) => {
   const msg = "📈 *USD/UZS haqiqiy interaktiv grafigini ko'rish uchun quyidagi tugmani bosing:*";
@@ -434,7 +434,7 @@ async function sendStats(ctx) {
   }
 }
 bot.action("stats", sendStats);
-bot.hears(/(📈|Statistika|Статистика|Stats)/i, sendStats);
+bot.hears(/^(📈 Statistika|📈 Статистика|📈 Stats|📈|Statistika|Статистика|Stats)$/i, sendStats);
 
 // ============================================================
 // 🧮 KALKULYATOR (Universal Regex)
@@ -557,9 +557,9 @@ async function sendWallet(ctx) {
   }
 }
 bot.action("wallet", sendWallet);
-bot.hears(/(💼|Hamyon|Кошелек|Wallet)/i, sendWallet);
+bot.hears(/^(💼 Hamyon|💼 Кошелек|💼 Wallet|💼|Hamyon|Кошелек|Wallet)$/i, sendWallet);
 bot.action("alerts", (ctx) => ctx.scene.enter('schedule-wizard'));
-bot.hears(/(⏰|Eslatma|Напоминание|Reminder)/i, (ctx) => ctx.scene.enter('schedule-wizard'));
+bot.hears(/^(⏰ Eslatma|⏰ Напоминание|⏰ Reminder|⏰|Eslatma|Напоминание|Reminder)$/i, (ctx) => ctx.scene.enter('schedule-wizard'));
 
 bot.command("add", async (ctx) => {
   const args = ctx.message.text.split(" ").slice(1);
