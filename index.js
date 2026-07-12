@@ -173,10 +173,12 @@ async function getCurrency(code) {
 let cryptoCache = {};
 async function updateCryptoCache() {
   try {
-    const { data } = await axiosWithRetry({ url: "https://api.binance.com/api/v3/ticker/price" });
+    const { data } = await axiosWithRetry({ url: "https://api.kucoin.com/api/v1/market/allTickers" });
     const prices = {};
-    for (const item of data) {
-      prices[item.symbol] = parseFloat(item.price);
+    if (data && data.data && data.data.ticker) {
+      for (const item of data.data.ticker) {
+        prices[item.symbol] = parseFloat(item.last);
+      }
     }
     cryptoCache = prices;
   } catch(e) { console.error("Crypto kesh xatosi:", e.message); }
@@ -320,7 +322,7 @@ async function sendGold(ctx) {
   if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
   
   const uzsRate = await getCurrency("USD").then(c => c ? parseFloat(c.Rate) : 12600);
-  const priceUsd = cryptoCache['PAXGUSDT'] || 0;
+  const priceUsd = cryptoCache['PAXG-USDT'] || 0;
   
   let msg = await t(userId, "gold_title") + "\n";
   if (priceUsd) {
@@ -346,14 +348,14 @@ async function sendCrypto(ctx) {
   const data = cryptoCache || {};
   let msg = await t(userId, "crypto_title") + "\n\n";
   
-  if (!data.BTCUSDT) {
+  if (!data['BTC-USDT']) {
       msg += await t(userId, "error") + " (Keshlanmoqda, kuting...)";
   } else {
-      msg += `🟠 *Bitcoin (BTC):* $${formatMoney(data.BTCUSDT)}\n`;
-      msg += `🔷 *Ethereum (ETH):* $${formatMoney(data.ETHUSDT)}\n`;
-      msg += `🟡 *Binance (BNB):* $${formatMoney(data.BNBUSDT)}\n`;
-      msg += `🟣 *Solana (SOL):* $${formatMoney(data.SOLUSDT)}\n`;
-      msg += `💎 *TON (TON):* $${formatMoney(data.TONUSDT)}\n`;
+      msg += `🟠 *Bitcoin (BTC):* $${formatMoney(data['BTC-USDT'])}\n`;
+      msg += `🔷 *Ethereum (ETH):* $${formatMoney(data['ETH-USDT'])}\n`;
+      msg += `🟡 *Binance (BNB):* $${formatMoney(data['BNB-USDT'])}\n`;
+      msg += `🟣 *Solana (SOL):* $${formatMoney(data['SOL-USDT'])}\n`;
+      msg += `💎 *TON (TON):* $${formatMoney(data['TON-USDT'])}\n`;
   }
   
   const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
@@ -450,7 +452,7 @@ async function sendWallet(ctx) {
   const cryptoData = cryptoCache || {};
 
   const rateUsd = usdData ? parseFloat(usdData.Rate) : 12600;
-  const prices = { usd: 1, btc: cryptoData.BTCUSDT || 0, eth: cryptoData.ETHUSDT || 0, ton: cryptoData.TONUSDT || 0 };
+  const prices = { usd: 1, btc: cryptoData['BTC-USDT'] || 0, eth: cryptoData['ETH-USDT'] || 0, ton: cryptoData['TON-USDT'] || 0 };
 
   let totalUsd = 0;
   let assetsText = "";
@@ -567,7 +569,7 @@ cron.schedule("* * * * *", async () => {
                const currency = await getCurrency(a.code);
                if(currency) msg = `⏰ *Belgilangan xabarnoma!* (${a.time})\n\n💰 1 ${a.code} = *${currency.Rate}* UZS\n📊 O'zgarish: ${currency.Diff > 0 ? '+' : ''}${currency.Diff}`;
            } else {
-               const price = (a.code === 'BTC' ? cryptoCache.BTCUSDT : null) || (a.code === 'ETH' ? cryptoCache.ETHUSDT : null) || (a.code === 'PAXG' ? cryptoCache.PAXGUSDT : null);
+               const price = (a.code === 'BTC' ? cryptoCache['BTC-USDT'] : null) || (a.code === 'ETH' ? cryptoCache['ETH-USDT'] : null) || (a.code === 'PAXG' ? cryptoCache['PAXG-USDT'] : null);
                if(price) msg = `⏰ *Belgilangan xabarnoma!* (${a.time})\n\n💰 1 ${a.code} = *$${price}*`;
            }
            if (msg) bot.telegram.sendMessage(user.userId, msg, {parse_mode: "Markdown"}).catch(()=>{});
@@ -583,7 +585,7 @@ cron.schedule("*/5 * * * *", async () => {
 
     const usdData = await getCurrency("USD");
     const cryptoData = cryptoCache || {};
-    const prices = { usd: usdData ? parseFloat(usdData.Rate) : 0, btc: cryptoData.BTCUSDT || 0, eth: cryptoData.ETHUSDT || 0, paxg: cryptoData.PAXGUSDT || 0 };
+    const prices = { usd: usdData ? parseFloat(usdData.Rate) : 0, btc: cryptoData['BTC-USDT'] || 0, eth: cryptoData['ETH-USDT'] || 0, paxg: cryptoData['PAXG-USDT'] || 0 };
 
     for (const user of users) {
       let triggered = [];
