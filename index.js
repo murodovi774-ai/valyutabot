@@ -690,15 +690,16 @@ app.get("/", (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Keep-Alive server ${PORT}-portda ishga tushdi.`);
+  
+  // Render eski botni o'chirishiga vaqt berish uchun 5 soniya kutamiz (409 Conflict oldini olish uchun)
+  setTimeout(() => {
+     bot.launch({ dropPendingUpdates: true }).then(() => {
+        console.log("✅ ValyutaUZ Bot (MongoDB) ishga tushdi!");
+     }).catch((err) => console.error("Bot launch xatosi:", err));
+  }, 5000);
 });
 
-// ============================================================
-// 🚀 BOTNI ISHGA TUSHURISH
-// ============================================================
-bot.launch().then(() => {
-  console.log("✅ ValyutaUZ Bot (MongoDB) ishga tushdi!");
-});
 process.once("SIGINT", () => bot.stop("SIGINT"));
 process.once("SIGTERM", () => bot.stop("SIGTERM"));
