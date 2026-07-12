@@ -24,12 +24,12 @@ const ADMIN_ID = process.env.ADMIN_ID;
 const scheduleWizard = new Scenes.WizardScene(
   'schedule-wizard',
   (ctx) => {
-    ctx.reply("🔔 Qaysi valyuta bo'yicha bildirishnoma olmoqchisiz?\nMasalan: USD, EUR, BTC, ETH yoki Oltin", Markup.keyboard([['USD', 'EUR', 'RUB'], ['BTC', 'ETH', 'Oltin']]).oneTime().resize());
+    ctx.reply("🔔 Qaysi valyuta bo'yicha eslatma olmoqchisiz?\nMasalan: USD, EUR, BTC, ETH yoki Oltin", Markup.keyboard([['USD', 'EUR', 'RUB'], ['BTC', 'ETH', 'Oltin']]).oneTime().resize());
     return ctx.wizard.next();
   },
   (ctx) => {
     ctx.wizard.state.currency = ctx.message.text.toUpperCase();
-    ctx.reply("⏰ Soat nechada xabarnoma kelsin? (Toshkent vaqti)\nFormat: HH:MM\nMisol: 09:00 yoki 15:30", Markup.removeKeyboard());
+    ctx.reply("⏰ Soat nechada eslatma kelsin? (Toshkent vaqti)\nFormat: HH:MM\nMisol: 09:00 yoki 15:30", Markup.removeKeyboard());
     return ctx.wizard.next();
   },
   async (ctx) => {
@@ -46,7 +46,7 @@ const scheduleWizard = new Scenes.WizardScene(
         await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts });
     }
     const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Asosiy menyuga qaytish", "main_menu")]]);
-    ctx.reply(`✅ Xabarnoma muvaffaqiyatli saqlandi!\n\nHar kuni soat ${time} da ${code} narxi yuboriladi.`, markup);
+    ctx.reply(`✅ Eslatma muvaffaqiyatli saqlandi!\n\nHar kuni soat ${time} da ${code} narxi yuboriladi.`, markup);
     return ctx.scene.leave();
   }
 );
@@ -474,36 +474,8 @@ async function sendWallet(ctx) {
 }
 bot.action("wallet", sendWallet);
 bot.hears(/(💼|Hamyon|Кошелек|Wallet)/i, sendWallet);
-bot.hears(/(⏰|Bildirish|Xabarnoma yozish)/i, (ctx) => ctx.scene.enter('schedule-wizard'));
-
-async function sendAlertsMenu(ctx) {
-  const userId = ctx.from.id;
-  const user = await getUser(userId);
-  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
-
-  const alerts = user.alerts || [];
-  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
-  
-  if (alerts.length === 0) {
-    const msg = await t(userId, "alert_prompt");
-    if (ctx.callbackQuery) {
-      try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-    } else {
-      await ctx.replyWithMarkdown(msg, markup);
-    }
-    return;
-  }
-
-  let list = alerts.map((a, i) => `${i+1}. ${a.code.toUpperCase()} 🎯 ${a.target}`).join("\n");
-  const msg = await t(userId, "alert_list", {list});
-  if (ctx.callbackQuery) {
-    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-  } else {
-    await ctx.replyWithMarkdown(msg, markup);
-  }
-}
-bot.action("alerts", sendAlertsMenu);
-bot.hears(/(🔔|Xabarnoma|Signal|Alert)/i, sendAlertsMenu);
+bot.action("alerts", (ctx) => ctx.scene.enter('schedule-wizard'));
+bot.hears(/(⏰|Eslatma|Напоминание|Reminder)/i, (ctx) => ctx.scene.enter('schedule-wizard'));
 
 bot.command("add", async (ctx) => {
   const args = ctx.message.text.split(" ").slice(1);
@@ -521,40 +493,6 @@ bot.command("add", async (ctx) => {
   ctx.reply(await t(ctx.from.id, "wallet_added", {amount, currency: coin.toUpperCase()}));
 });
 
-bot.command("alert", async (ctx) => {
-  const args = ctx.message.text.split(" ").slice(1);
-  if (args.length < 2) return ctx.reply("Misol: `/alert btc 70000`", {parse_mode:"Markdown"});
-  
-  const code = args[0].toLowerCase();
-  const target = parseFloat(args[1]);
-  if (isNaN(target)) return;
-
-  const user = await getUser(ctx.from.id);
-  const alerts = user.alerts || [];
-  alerts.push({ code, target });
-  
-  await User.updateOne({ userId: ctx.from.id }, { alerts });
-  ctx.reply(await t(ctx.from.id, "alert_added", {code: code.toUpperCase(), target}));
-});
-
-bot.command("schedule", async (ctx) => {
-  const args = ctx.message.text.split(" ").slice(1);
-  if (args.length < 2) return ctx.reply("Misol: `/schedule USD 09:00`", {parse_mode:"Markdown"});
-  
-  const code = args[0].toUpperCase();
-  const time = args[1]; // format HH:MM
-  if (!/^\d{2}:\d{2}$/.test(time)) return ctx.reply("Vaqt formati noto'g'ri. Misol: 09:00 yoki 15:30");
-
-  const user = await getUser(ctx.from.id);
-  const scheduledAlerts = user.scheduledAlerts || [];
-  
-  if(!scheduledAlerts.some(a => a.code === code && a.time === time)) {
-      scheduledAlerts.push({ code, time });
-      await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts });
-  }
-  ctx.reply(`✅ Xabarnoma belgilandi: Har kuni soat ${time} da ${code} kursi yuboriladi.`);
-});
-
 cron.schedule("* * * * *", async () => {
     const now = new Date();
     const options = { timeZone: 'Asia/Tashkent', hour: '2-digit', minute: '2-digit', hour12: false };
@@ -567,45 +505,14 @@ cron.schedule("* * * * *", async () => {
            let msg = "";
            if (['USD', 'EUR', 'RUB'].includes(a.code)) {
                const currency = await getCurrency(a.code);
-               if(currency) msg = `⏰ *Belgilangan xabarnoma!* (${a.time})\n\n💰 1 ${a.code} = *${currency.Rate}* UZS\n📊 O'zgarish: ${currency.Diff > 0 ? '+' : ''}${currency.Diff}`;
+               if(currency) msg = `⏰ *Eslatma!* (${a.time})\n\n💰 1 ${a.code} = *${currency.Rate}* UZS\n📊 O'zgarish: ${currency.Diff > 0 ? '+' : ''}${currency.Diff}`;
            } else {
                const price = (a.code === 'BTC' ? cryptoCache['BTC-USDT'] : null) || (a.code === 'ETH' ? cryptoCache['ETH-USDT'] : null) || (a.code === 'PAXG' ? cryptoCache['PAXG-USDT'] : null);
-               if(price) msg = `⏰ *Belgilangan xabarnoma!* (${a.time})\n\n💰 1 ${a.code} = *$${price}*`;
+               if(price) msg = `⏰ *Eslatma!* (${a.time})\n\n💰 1 ${a.code} = *$${price}*`;
            }
            if (msg) bot.telegram.sendMessage(user.userId, msg, {parse_mode: "Markdown"}).catch(()=>{});
         }
     }
-});
-
-cron.schedule("*/5 * * * *", async () => {
-  console.log("🔔 Signallar tekshirilmoqda (Kesh orqali)...");
-  try {
-    const users = await User.find({ "alerts.0": { $exists: true } });
-    if (users.length === 0) return;
-
-    const usdData = await getCurrency("USD");
-    const cryptoData = cryptoCache || {};
-    const prices = { usd: usdData ? parseFloat(usdData.Rate) : 0, btc: cryptoData['BTC-USDT'] || 0, eth: cryptoData['ETH-USDT'] || 0, paxg: cryptoData['PAXG-USDT'] || 0 };
-
-    for (const user of users) {
-      let triggered = [];
-      let newAlerts = user.alerts.filter(a => {
-        const currentPrice = prices[a.code] || 0;
-        if (currentPrice === 0) return true;
-        if (Math.abs(currentPrice - a.target) / a.target < 0.01) {
-          triggered.push({ code: a.code, target: a.target, current: currentPrice });
-          return false;
-        }
-        return true;
-      });
-
-      for (const trig of triggered) {
-        const msg = await t(user.userId, "alert_triggered", { code: trig.code.toUpperCase(), current: formatMoney(trig.current), target: trig.target });
-        bot.telegram.sendMessage(user.userId, msg, { parse_mode: "Markdown" }).catch(()=>{});
-      }
-      if (triggered.length > 0) await User.updateOne({ userId: user.userId }, { alerts: newAlerts });
-    }
-  } catch(e) { console.error("Alert Cron xatosi:", e.message); }
 });
 
 // ============================================================
