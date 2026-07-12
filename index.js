@@ -193,15 +193,16 @@ async function sendMainMenu(ctx) {
 bot.command("menu", sendMainMenu);
 bot.action("main_menu", sendMainMenu);
 
-bot.action(/rate_(USD|EUR|RUB)/, async (ctx) => {
-  const code = ctx.match[1];
-  const flag = { USD: "🇺🇸", EUR: "🇪🇺", RUB: "🇷🇺" }[code];
+// ============================================================
+// 📊 YANGI FUNKSIYALAR VA HANDLERLAR
+// ============================================================
+async function sendRate(ctx, code) {
   const userId = ctx.from.id;
-
-  await ctx.answerCbQuery(await t(userId, "wait"));
-  const currency = await getCurrency(code);
+  const flag = { USD: "🇺🇸", EUR: "🇪🇺", RUB: "🇷🇺" }[code];
+  if (ctx.callbackQuery) await ctx.answerCbQuery(await t(userId, "wait")).catch(()=>{});
   
-  if (!currency) return ctx.editMessageText(await t(userId, "error"));
+  const currency = await getCurrency(code);
+  if (!currency) return ctx.reply(await t(userId, "error"));
 
   const rate = parseFloat(currency.Rate);
   const diff = parseFloat(currency.Diff);
@@ -210,32 +211,140 @@ bot.action(/rate_(USD|EUR|RUB)/, async (ctx) => {
   else if (diff < 0) diffText = await t(userId, "down", { amount: formatMoney(Math.abs(diff)) });
 
   const msg = await t(userId, "rate_msg", { flag, code, rate: formatMoney(rate), diffText, time: getTimeStr() });
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback(await t(userId, "refresh"), `rate_${code}`)],
+    [Markup.button.callback("⬅️", "main_menu")]
+  ]);
 
-  try {
-    await ctx.editMessageText(msg, {
-      parse_mode: "Markdown",
-      reply_markup: Markup.inlineKeyboard([
-        [Markup.button.callback(await t(userId, "refresh"), `rate_${code}`)],
-        [Markup.button.callback("⬅️", "main_menu")]
-      ]).reply_markup
-    });
-  } catch (e) {}
-});
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch (e) {}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+
+bot.action(/rate_(USD|EUR|RUB)/, (ctx) => sendRate(ctx, ctx.match[1]));
+bot.hears(/(🇺🇸|USD)/i, (ctx) => sendRate(ctx, "USD"));
+bot.hears(/(🇪🇺|EUR)/i, (ctx) => sendRate(ctx, "EUR"));
+bot.hears(/(🇷🇺|RUB)/i, (ctx) => sendRate(ctx, "RUB"));
+
+async function sendBanks(ctx) {
+  const msg = "🏦 *O'zbekiston banklari bo'yicha kurslar:*\n\n_(Tez kunda barcha tijorat banklarining real vaqt kurslari ulanadi)_";
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
+  if (ctx.callbackQuery) {
+    await ctx.answerCbQuery().catch(()=>{});
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("banks", sendBanks);
+bot.hears(/(🏦|Bank)/i, sendBanks);
+
+async function sendGold(ctx) {
+  const userId = ctx.from.id;
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+  
+  const uzsRate = await getCurrency("USD").then(c => c ? parseFloat(c.Rate) : 12600);
+  const req = await axiosWithRetry({ url: "https://api.coingecko.com/api/v3/simple/price?ids=tether-gold&vs_currencies=usd" }).catch(()=>null);
+  const priceUsd = req?.data?.['tether-gold']?.usd || 0;
+  
+  let msg = await t(userId, "gold_title") + "\n";
+  if (priceUsd) {
+    const gramUsd = priceUsd / 31.1035;
+    msg += `${await t(userId, "gold_ounce")} $${formatMoney(priceUsd)} / ${formatMoney(priceUsd * uzsRate)} UZS\n`;
+    msg += `${await t(userId, "gold_gram")} $${formatMoney(gramUsd)} / ${formatMoney(gramUsd * uzsRate)} UZS\n`;
+  } else {
+    msg += await t(userId, "error");
+  }
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("gold", sendGold);
+bot.hears(/(🪙 Oltin|🪙 Золото|🪙 Gold|Oltin|Золото)/i, sendGold);
+
+async function sendCrypto(ctx) {
+  const userId = ctx.from.id;
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+  const req = await axiosWithRetry({ url: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,the-open-network,solana,binancecoin&vs_currencies=usd" }).catch(()=>null);
+  const data = req?.data || {};
+  let msg = await t(userId, "crypto_title") + "\n\n";
+  msg += `🟠 *Bitcoin (BTC):* $${formatMoney(data.bitcoin?.usd)}\n`;
+  msg += `🔷 *Ethereum (ETH):* $${formatMoney(data.ethereum?.usd)}\n`;
+  msg += `🟡 *Binance (BNB):* $${formatMoney(data.binancecoin?.usd)}\n`;
+  msg += `🟣 *Solana (SOL):* $${formatMoney(data.solana?.usd)}\n`;
+  msg += `💎 *TON (TON):* $${formatMoney(data['the-open-network']?.usd)}\n`;
+  
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("crypto", sendCrypto);
+bot.hears(/(🪙 Kripto|🪙 Крипто|🪙 Crypto|Kripto|Крипто)/i, sendCrypto);
+
+async function sendChart(ctx) {
+  const userId = ctx.from.id;
+  if (ctx.callbackQuery) await ctx.answerCbQuery(await t(userId, "wait")).catch(()=>{});
+  const { data } = await axiosWithRetry({ url: "https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/USD/" }).catch(()=>({data:[]}));
+  if (!data || data.length === 0) return ctx.reply(await t(userId, "error"));
+  
+  const last7 = data.slice(0, 7).reverse();
+  const labels = last7.map(d => d.Date.slice(0,5));
+  const rates = last7.map(d => parseFloat(d.Rate));
+  
+  const chartObj = { type: 'line', data: { labels: labels, datasets: [{ label: 'USD/UZS', data: rates, borderColor: '#3498db', fill: false }] } };
+  const chartUrl = `https://quickchart.io/chart?w=500&h=300&c=${encodeURIComponent(JSON.stringify(chartObj))}`;
+  const msg = await t(userId, "chart_caption", { code: "USD", days: 7, changeText: "", lastRate: formatMoney(rates[rates.length-1]) });
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
+  
+  if (ctx.callbackQuery) {
+    await ctx.deleteMessage().catch(()=>{});
+  }
+  await ctx.replyWithPhoto({ url: chartUrl }, { caption: msg, parse_mode: "Markdown", reply_markup: markup.reply_markup });
+}
+bot.action("chart_menu", sendChart);
+bot.hears(/(📊|Grafik|График|Chart)/i, sendChart);
+
+async function sendStats(ctx) {
+  const usersCount = await User.countDocuments();
+  const alertsCount = await User.countDocuments({ "alerts.0": { $exists: true } });
+  const msg = `📊 *Bot Statistikasi:*\n\n👥 *Jami foydalanuvchilar:* ${usersCount} ta\n🔔 *Signallar o'rnatilgan:* ${alertsCount} ta\n⚡️ *Holati:* 100% Onlayn (MongoDB)`;
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
+  if (ctx.callbackQuery) {
+    await ctx.answerCbQuery().catch(()=>{});
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("stats", sendStats);
+bot.hears(/(📈|Statistika|Статистика|Stats)/i, sendStats);
 
 // ============================================================
 // 💼 HAMYON & SIGNALLAR (DB bilan ishlaydi)
 // ============================================================
-bot.action("wallet", async (ctx) => {
+async function sendWallet(ctx) {
   const userId = ctx.from.id;
   const user = await getUser(userId);
-  await ctx.answerCbQuery();
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
 
   const pf = user.portfolio || {};
   if (Object.keys(pf).length === 0) {
-    return ctx.editMessageText(await t(userId, "wallet_empty"), {
-      parse_mode: "Markdown",
-      reply_markup: Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]).reply_markup
-    });
+    const msg = await t(userId, "wallet_empty");
+    const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
+    if (ctx.callbackQuery) {
+      try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+    } else {
+      await ctx.replyWithMarkdown(msg, markup);
+    }
+    return;
   }
 
   const [usdData, cryptoData] = await Promise.all([
@@ -256,11 +365,45 @@ bot.action("wallet", async (ctx) => {
   }
 
   const msg = await t(userId, "wallet_total", { assets: assetsText, totalUsd: formatMoney(totalUsd), totalUzs: formatMoney(totalUsd * rateUsd) });
-  await ctx.editMessageText(msg, {
-    parse_mode: "Markdown",
-    reply_markup: Markup.inlineKeyboard([[Markup.button.callback(await t(userId, "refresh"), "wallet")], [Markup.button.callback("⬅️", "main_menu")]]).reply_markup
-  });
-});
+  const markup = Markup.inlineKeyboard([[Markup.button.callback(await t(userId, "refresh"), "wallet")], [Markup.button.callback("⬅️", "main_menu")]]);
+  
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("wallet", sendWallet);
+bot.hears(/(💼|Hamyon|Кошелек|Wallet)/i, sendWallet);
+
+async function sendAlertsMenu(ctx) {
+  const userId = ctx.from.id;
+  const user = await getUser(userId);
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+
+  const alerts = user.alerts || [];
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
+  
+  if (alerts.length === 0) {
+    const msg = await t(userId, "alert_prompt");
+    if (ctx.callbackQuery) {
+      try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+    } else {
+      await ctx.replyWithMarkdown(msg, markup);
+    }
+    return;
+  }
+
+  let list = alerts.map((a, i) => `${i+1}. ${a.code.toUpperCase()} 🎯 ${a.target}`).join("\n");
+  const msg = await t(userId, "alert_list", {list});
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("alerts", sendAlertsMenu);
+bot.hears(/(🔔|Xabarnoma|Signal|Alert)/i, sendAlertsMenu);
 
 bot.command("add", async (ctx) => {
   const args = ctx.message.text.split(" ").slice(1);
@@ -292,20 +435,6 @@ bot.command("alert", async (ctx) => {
   
   await User.updateOne({ userId: ctx.from.id }, { alerts });
   ctx.reply(await t(ctx.from.id, "alert_added", {code: code.toUpperCase(), target}));
-});
-
-bot.action("alerts", async (ctx) => {
-  const userId = ctx.from.id;
-  const user = await getUser(userId);
-  await ctx.answerCbQuery();
-
-  const alerts = user.alerts || [];
-  if (alerts.length === 0) {
-    return ctx.editMessageText(await t(userId, "alert_prompt"), { parse_mode: "Markdown", reply_markup: Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]).reply_markup });
-  }
-
-  let list = alerts.map((a, i) => `${i+1}. ${a.code.toUpperCase()} 🎯 ${a.target}`).join("\n");
-  ctx.editMessageText(await t(userId, "alert_list", {list}), { parse_mode: "Markdown", reply_markup: Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]).reply_markup });
 });
 
 cron.schedule("*/5 * * * *", async () => {
