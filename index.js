@@ -41,10 +41,12 @@ const scheduleWizard = new Scenes.WizardScene(
     const code = ctx.wizard.state.currency === 'OLTIN' ? 'PAXG' : ctx.wizard.state.currency;
     const user = await getUser(ctx.from.id);
     const scheduledAlerts = user.scheduledAlerts || [];
-    if(!scheduledAlerts.some(a => a.code === code && a.time === time)) {
-        scheduledAlerts.push({ code, time });
-        await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts });
-    }
+    
+    // Eski shu valyutadagi eslatmani o'chirib yangisini yozamiz
+    const filteredAlerts = scheduledAlerts.filter(a => a.code !== code);
+    filteredAlerts.push({ code, time });
+    await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts: filteredAlerts });
+    
     const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Asosiy menyuga qaytish", "main_menu")]]);
     ctx.reply(`✅ Eslatma muvaffaqiyatli saqlandi!\n\nHar kuni soat ${time} da ${code} narxi yuboriladi.`, markup);
     return ctx.scene.leave();
@@ -222,13 +224,13 @@ bot.action(/lang_(uz|ru|en)/, async (ctx) => {
 async function sendMainMenu(ctx) {
   const userId = ctx.from.id;
   const name = ctx.from.first_name;
-  
-  const menu = Markup.inlineKeyboard([
-    [Markup.button.callback(await t(userId, "btn_usd"), "rate_USD"), Markup.button.callback(await t(userId, "btn_eur"), "rate_EUR"), Markup.button.callback(await t(userId, "btn_rub"), "rate_RUB")],
-    [Markup.button.callback(await t(userId, "btn_gold"), "gold"), Markup.button.callback(await t(userId, "btn_crypto"), "crypto")],
-    [Markup.button.callback(await t(userId, "btn_chart"), "chart_menu"), Markup.button.callback(await t(userId, "btn_wallet"), "wallet")],
-    [Markup.button.callback(await t(userId, "btn_banks"), "banks"), Markup.button.callback(await t(userId, "btn_alerts"), "alerts")]
-  ]);
+    const menu = Markup.inlineKeyboard([
+      [Markup.button.callback(await t(userId, "btn_usd"), "rate_USD"), Markup.button.callback(await t(userId, "btn_eur"), "rate_EUR"), Markup.button.callback(await t(userId, "btn_rub"), "rate_RUB")],
+      [Markup.button.callback(await t(userId, "btn_gold"), "gold"), Markup.button.callback(await t(userId, "btn_crypto"), "crypto")],
+      [Markup.button.callback(await t(userId, "btn_chart"), "chart_menu"), Markup.button.callback(await t(userId, "btn_wallet"), "wallet")],
+      [Markup.button.callback(await t(userId, "btn_banks"), "banks"), Markup.button.callback(await t(userId, "btn_alerts"), "alerts")],
+      [Markup.button.callback("🧮 Kalkulyator", "calculator")]
+    ]);
 
   const msg = await t(userId, "start", { name });
   
@@ -278,7 +280,11 @@ bot.hears(/(🇺🇸|USD)/i, (ctx) => sendRate(ctx, "USD"));
 bot.hears(/(🇪🇺|EUR)/i, (ctx) => sendRate(ctx, "EUR"));
 bot.hears(/(🇷🇺|RUB)/i, (ctx) => sendRate(ctx, "RUB"));
 
+let dollaruzCache = null;
+let lastDollaruzFetch = null;
 async function fetchDollaruzBanks() {
+  const now = Date.now();
+  if (dollaruzCache && lastDollaruzFetch && now - lastDollaruzFetch < 5 * 60 * 1000) return dollaruzCache;
   try {
     const { data } = await axiosWithRetry({ url: "https://dollaruz.net/", timeout: 10000 });
     const regex = /<span class="tb-lead name-val">(.*?)<\/span>.*?<span class="num-val">([\d\s]+)<\/span>.*?<span class="num-val">([\d\s]+)<\/span>/gs;
@@ -288,8 +294,12 @@ async function fetchDollaruzBanks() {
       banks.push({ name: match[1].replace(/<[^>]*>?/gm, '').trim(), buy: match[2].replace(/\s/g, ''), sell: match[3].replace(/\s/g, '') });
       if(banks.length >= 10) break;
     }
-    return banks;
-  } catch(e) { return null; }
+    if (banks.length > 0) {
+      dollaruzCache = banks;
+      lastDollaruzFetch = now;
+    }
+    return dollaruzCache;
+  } catch(e) { return dollaruzCache; }
 }
 
 async function sendBanks(ctx) {
@@ -413,8 +423,8 @@ bot.action("chart_BTC", async (ctx) => {
 
 async function sendStats(ctx) {
   const usersCount = await User.countDocuments();
-  const alertsCount = await User.countDocuments({ "alerts.0": { $exists: true } });
-  const msg = `📊 *Bot Statistikasi:*\n\n👥 *Jami foydalanuvchilar:* ${usersCount} ta\n🔔 *Signallar o'rnatilgan:* ${alertsCount} ta\n⚡️ *Holati:* 100% Onlayn (MongoDB)`;
+  const alertsCount = await User.countDocuments({ "scheduledAlerts.0": { $exists: true } });
+  const msg = `📊 *Bot Statistikasi:*\n\n👥 *Jami foydalanuvchilar:* ${usersCount} ta\n⏰ *Eslatmalar o'rnatilgan:* ${alertsCount} ta\n⚡️ *Holati:* 100% Onlayn (MongoDB)`;
   const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
   if (ctx.callbackQuery) {
     await ctx.answerCbQuery().catch(()=>{});
@@ -425,6 +435,80 @@ async function sendStats(ctx) {
 }
 bot.action("stats", sendStats);
 bot.hears(/(📈|Statistika|Статистика|Stats)/i, sendStats);
+
+// ============================================================
+// 🧮 KALKULYATOR (Universal Regex)
+// ============================================================
+bot.action("calculator", async (ctx) => {
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+  const msg = "🧮 *Kalkulyatorga xush kelibsiz!*\n\nIstalgan summani va valyutani yozib yuboring.\nMisol uchun:\n`100 USD`\n`50000 UZS`\n`0.5 BTC`\n\nMen uni barcha asosiy valyutalarga o'girib beraman!";
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Orqaga", "main_menu")]]);
+  if (ctx.callbackQuery) {
+      await ctx.editMessageText(msg, {parse_mode: "Markdown", reply_markup: markup.reply_markup}).catch(()=>{});
+  } else {
+      await ctx.replyWithMarkdown(msg, markup);
+  }
+});
+
+const calcRegex = /^([\d\s\,\.]+)\s*(uzs|som|so'm|sum|usd|eur|rub|btc|eth|ton|bnb|sol|paxg|oltin)$/i;
+bot.hears(calcRegex, async (ctx) => {
+  const strAmount = ctx.match[1];
+  let currency = ctx.match[2].toUpperCase();
+  
+  let cleaned = strAmount.replace(/\s/g, '');
+  if(cleaned.indexOf(',') > -1 && cleaned.indexOf('.') > -1) {
+    cleaned = cleaned.replace(/,/g, '');
+  } else {
+    cleaned = cleaned.replace(/,/g, '.');
+  }
+  const parts = cleaned.split('.');
+  if(parts.length > 2) {
+    cleaned = parts.slice(0, -1).join('') + '.' + parts[parts.length - 1];
+  }
+  const amount = parseFloat(cleaned);
+  if (isNaN(amount) || amount <= 0) return;
+
+  const [usdData, eurData, rubData] = await Promise.all([
+     getCurrency("USD"), getCurrency("EUR"), getCurrency("RUB")
+  ]);
+  const cryptoData = cryptoCache || {};
+  
+  const rates = {
+    USD: usdData ? parseFloat(usdData.Rate) : 12600,
+    EUR: eurData ? parseFloat(eurData.Rate) : 13600,
+    RUB: rubData ? parseFloat(rubData.Rate) : 140,
+    BTC: cryptoData['BTC-USDT'] || 64000,
+    ETH: cryptoData['ETH-USDT'] || 3500,
+    TON: cryptoData['TON-USDT'] || 7.5,
+    BNB: cryptoData['BNB-USDT'] || 600,
+    SOL: cryptoData['SOL-USDT'] || 140,
+    PAXG: cryptoData['PAXG-USDT'] || 2300,
+  };
+
+  if (['SO\'M', 'SOM', 'SUM'].includes(currency)) currency = 'UZS';
+  if (currency === 'OLTIN') currency = 'PAXG';
+
+  let usdValue = 0;
+  if (currency === 'UZS') {
+      usdValue = amount / rates.USD;
+  } else if (['USD', 'EUR', 'RUB'].includes(currency)) {
+      usdValue = currency === 'USD' ? amount : (amount * rates[currency] / rates.USD);
+  } else if (['BTC', 'ETH', 'TON', 'BNB', 'SOL', 'PAXG'].includes(currency)) {
+      usdValue = amount * rates[currency];
+  }
+
+  let msg = `🧮 *Kalkulyator Natijasi:*\n\nKiritildi: *${formatMoney(amount)} ${currency}*\n\n`;
+  if (currency !== 'UZS') msg += `🇺🇿 UZS: *${formatMoney(usdValue * rates.USD)}* so'm\n`;
+  if (currency !== 'USD') msg += `🇺🇸 USD: *$${formatSmallMoney(usdValue)}*\n`;
+  if (currency !== 'EUR') msg += `🇪🇺 EUR: *€${formatSmallMoney(usdValue * rates.USD / rates.EUR)}*\n`;
+  if (currency !== 'RUB') msg += `🇷🇺 RUB: *₽${formatMoney(usdValue * rates.USD / rates.RUB)}*\n`;
+  msg += `\n`;
+  if (currency !== 'BTC') msg += `🟠 BTC: *${formatSmallMoney(usdValue / rates.BTC)}*\n`;
+  if (currency !== 'ETH') msg += `🔷 ETH: *${formatSmallMoney(usdValue / rates.ETH)}*\n`;
+  if (currency !== 'TON') msg += `💎 TON: *${formatSmallMoney(usdValue / rates.TON)}*\n`;
+
+  await ctx.replyWithMarkdown(msg);
+});
 
 // ============================================================
 // 💼 HAMYON & SIGNALLAR (DB bilan ishlaydi)
