@@ -1,5 +1,5 @@
 require("dotenv").config();
-const { Telegraf, Markup } = require("telegraf");
+const { Telegraf, Markup, session, Scenes } = require("telegraf");
 const axios = require("axios");
 const cron = require("node-cron");
 const express = require("express");
@@ -20,6 +20,39 @@ if (!process.env.MONGODB_URI) {
 
 const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_ID = process.env.ADMIN_ID;
+
+const scheduleWizard = new Scenes.WizardScene(
+  'schedule-wizard',
+  (ctx) => {
+    ctx.reply("🔔 Qaysi valyuta bo'yicha bildirishnoma olmoqchisiz?\nMasalan: USD, EUR, BTC, ETH yoki Oltin", Markup.keyboard([['USD', 'EUR', 'RUB'], ['BTC', 'ETH', 'Oltin']]).oneTime().resize());
+    return ctx.wizard.next();
+  },
+  (ctx) => {
+    ctx.wizard.state.currency = ctx.message.text.toUpperCase();
+    ctx.reply("⏰ Soat nechada xabarnoma kelsin? (Toshkent vaqti)\nFormat: HH:MM\nMisol: 09:00 yoki 15:30", Markup.removeKeyboard());
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const time = ctx.message.text;
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      ctx.reply("❌ Vaqt formati noto'g'ri! Iltimos qaytadan urining.");
+      return ctx.scene.leave();
+    }
+    const code = ctx.wizard.state.currency === 'OLTIN' ? 'PAXG' : ctx.wizard.state.currency;
+    const user = await getUser(ctx.from.id);
+    const scheduledAlerts = user.scheduledAlerts || [];
+    if(!scheduledAlerts.some(a => a.code === code && a.time === time)) {
+        scheduledAlerts.push({ code, time });
+        await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts });
+    }
+    const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Asosiy menyuga qaytish", "main_menu")]]);
+    ctx.reply(`✅ Xabarnoma muvaffaqiyatli saqlandi!\n\nHar kuni soat ${time} da ${code} narxi yuboriladi.`, markup);
+    return ctx.scene.leave();
+  }
+);
+const stage = new Scenes.Stage([scheduleWizard]);
+bot.use(session());
+bot.use(stage.middleware());
 
 // ============================================================
 // 💾 MONGODB BAZASI (Mongoose)
@@ -140,8 +173,12 @@ async function getCurrency(code) {
 let cryptoCache = {};
 async function updateCryptoCache() {
   try {
-    const { data } = await axiosWithRetry({ url: "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin,ethereum,the-open-network,solana,binancecoin,tether-gold&vs_currencies=usd" });
-    if(data) cryptoCache = data;
+    const { data } = await axiosWithRetry({ url: "https://api.binance.com/api/v3/ticker/price" });
+    const prices = {};
+    for (const item of data) {
+      prices[item.symbol] = parseFloat(item.price);
+    }
+    cryptoCache = prices;
   } catch(e) { console.error("Crypto kesh xatosi:", e.message); }
 }
 cron.schedule("*/2 * * * *", updateCryptoCache);
@@ -239,25 +276,33 @@ bot.hears(/(🇺🇸|USD)/i, (ctx) => sendRate(ctx, "USD"));
 bot.hears(/(🇪🇺|EUR)/i, (ctx) => sendRate(ctx, "EUR"));
 bot.hears(/(🇷🇺|RUB)/i, (ctx) => sendRate(ctx, "RUB"));
 
+async function fetchDollaruzBanks() {
+  try {
+    const { data } = await axiosWithRetry({ url: "https://dollaruz.net/", timeout: 10000 });
+    const regex = /<span class="tb-lead name-val">(.*?)<\/span>.*?<span class="num-val">([\d\s]+)<\/span>.*?<span class="num-val">([\d\s]+)<\/span>/gs;
+    let match;
+    const banks = [];
+    while ((match = regex.exec(data)) !== null) {
+      banks.push({ name: match[1].replace(/<[^>]*>?/gm, '').trim(), buy: match[2].replace(/\s/g, ''), sell: match[3].replace(/\s/g, '') });
+      if(banks.length >= 10) break;
+    }
+    return banks;
+  } catch(e) { return null; }
+}
+
 async function sendBanks(ctx) {
   const userId = ctx.from.id;
   if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
   
-  const nbuReq = await axiosWithRetry({ url: "https://nbu.uz/uz/exchange-rates/json/" }).catch(()=>null);
-  let msg = "🏦 *O'zbekiston banklari kursi (NBU)*\n\n";
-  if (nbuReq && nbuReq.data) {
-     const usd = nbuReq.data.find(c => c.code === "USD");
-     const eur = nbuReq.data.find(c => c.code === "EUR");
-     if(usd) msg += `🇺🇸 *USD:*\nSotib olish: ${usd.cb_price} so'm\nSotish: ${usd.nbu_cell_price} so'm\n\n`;
-     if(eur) msg += `🇪🇺 *EUR:*\nSotib olish: ${eur.cb_price} so'm\nSotish: ${eur.nbu_cell_price} so'm\n\n`;
+  const banks = await fetchDollaruzBanks();
+  let msg = "🏦 *O'zbekiston banklari kursi (dollaruz.net)*\n\n";
+  if (banks && banks.length > 0) {
+     msg += "🇺🇸 *1 AQSh dollari (USD):*\n\n";
+     banks.forEach(b => {
+        msg += `🏛 *${b.name}:*\nOlish: ${formatMoney(parseFloat(b.buy))} | Sotish: ${formatMoney(parseFloat(b.sell))}\n\n`;
+     });
   } else {
-     const usdCbu = await getCurrency("USD");
-     if (usdCbu) {
-         const rate = parseFloat(usdCbu.Rate);
-         msg += `🇺🇸 *USD (Taxminiy tijorat):*\nSotib olish: ${formatMoney(rate - 50)} so'm\nSotish: ${formatMoney(rate + 50)} so'm\n\n`;
-     } else {
-         msg += "❌ Xatolik yuz berdi.";
-     }
+     msg += "❌ Xatolik yuz berdi yoki sayt ishlamayapti.";
   }
   
   const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
@@ -275,7 +320,7 @@ async function sendGold(ctx) {
   if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
   
   const uzsRate = await getCurrency("USD").then(c => c ? parseFloat(c.Rate) : 12600);
-  const priceUsd = cryptoCache['tether-gold']?.usd || 0;
+  const priceUsd = cryptoCache['PAXGUSDT'] || 0;
   
   let msg = await t(userId, "gold_title") + "\n";
   if (priceUsd) {
@@ -301,14 +346,14 @@ async function sendCrypto(ctx) {
   const data = cryptoCache || {};
   let msg = await t(userId, "crypto_title") + "\n\n";
   
-  if (!data.bitcoin) {
+  if (!data.BTCUSDT) {
       msg += await t(userId, "error") + " (Keshlanmoqda, kuting...)";
   } else {
-      msg += `🟠 *Bitcoin (BTC):* $${formatMoney(data.bitcoin?.usd)}\n`;
-      msg += `🔷 *Ethereum (ETH):* $${formatMoney(data.ethereum?.usd)}\n`;
-      msg += `🟡 *Binance (BNB):* $${formatMoney(data.binancecoin?.usd)}\n`;
-      msg += `🟣 *Solana (SOL):* $${formatMoney(data.solana?.usd)}\n`;
-      msg += `💎 *TON (TON):* $${formatMoney(data['the-open-network']?.usd)}\n`;
+      msg += `🟠 *Bitcoin (BTC):* $${formatMoney(data.BTCUSDT)}\n`;
+      msg += `🔷 *Ethereum (ETH):* $${formatMoney(data.ETHUSDT)}\n`;
+      msg += `🟡 *Binance (BNB):* $${formatMoney(data.BNBUSDT)}\n`;
+      msg += `🟣 *Solana (SOL):* $${formatMoney(data.SOLUSDT)}\n`;
+      msg += `💎 *TON (TON):* $${formatMoney(data.TONUSDT)}\n`;
   }
   
   const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
@@ -339,76 +384,29 @@ bot.action("chart_menu", sendChartMenu);
 bot.hears(/(📊|Grafik|График|Chart)/i, sendChartMenu);
 
 bot.action("chart_USD", async (ctx) => {
-  const userId = ctx.from.id;
-  await ctx.answerCbQuery(await t(userId, "wait")).catch(()=>{});
-  const { data } = await axiosWithRetry({ url: "https://cbu.uz/uz/arkhiv-kursov-valyut/json/all/USD/" }).catch(()=>({data:[]}));
-  if (!data || data.length === 0) return ctx.reply(await t(userId, "error"));
-  
-  const last7 = data.slice(0, 7).reverse();
-  const labels = last7.map(d => d.Date.slice(0,5));
-  const rates = last7.map(d => parseFloat(d.Rate));
-  
-  const chartObj = { 
-    type: 'line', 
-    data: { 
-      labels: labels, 
-      datasets: [{ 
-        label: 'USD/UZS', 
-        data: rates, 
-        borderColor: '#00e676', 
-        backgroundColor: 'rgba(0, 230, 118, 0.1)',
-        fill: true,
-        pointBackgroundColor: '#fff',
-        pointBorderColor: '#00e676',
-        pointRadius: 4,
-        tension: 0.4
-      }] 
-    },
-    options: {
-      plugins: { legend: { labels: { color: '#fff' } } },
-      scales: { 
-        x: { ticks: { color: '#fff' }, grid: { color: 'rgba(255, 255, 255, 0.1)' } },
-        y: { ticks: { color: '#fff' }, grid: { color: 'rgba(255, 255, 255, 0.1)' } }
-      }
-    }
-  };
-  const chartUrl = `https://quickchart.io/chart?w=600&h=400&bkg=1e1e1e&c=${encodeURIComponent(JSON.stringify(chartObj))}`;
-  const msg = await t(userId, "chart_caption", { code: "USD", days: 7, changeText: "", lastRate: formatMoney(rates[rates.length-1]) });
-  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
-  await ctx.deleteMessage().catch(()=>{});
-  await ctx.replyWithPhoto({ url: chartUrl }, { caption: msg, parse_mode: "Markdown", reply_markup: markup.reply_markup });
+  const msg = "📈 *USD/UZS haqiqiy interaktiv grafigini ko'rish uchun quyidagi tugmani bosing:*";
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.url("📈 TradingView orqali ko'rish", "https://ru.tradingview.com/symbols/USDUZS/")],
+    [Markup.button.callback("⬅️ Orqaga", "main_menu")]
+  ]);
+  if (ctx.callbackQuery) {
+      await ctx.editMessageText(msg, {parse_mode: "Markdown", reply_markup: markup.reply_markup}).catch(()=>{});
+  } else {
+      await ctx.replyWithMarkdown(msg, markup);
+  }
 });
 
 bot.action("chart_BTC", async (ctx) => {
-  const userId = ctx.from.id;
-  await ctx.answerCbQuery(await t(userId, "wait")).catch(()=>{});
-  const req = await axiosWithRetry({ url: "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=30" }).catch(()=>null);
-  if (!req || !req.data) return ctx.reply(await t(userId, "error"));
-  
-  const klines = req.data;
-  const chartData = klines.map(k => ({
-      t: new Date(k[0]).toISOString().slice(0,10),
-      o: parseFloat(k[1]),
-      h: parseFloat(k[2]),
-      l: parseFloat(k[3]),
-      c: parseFloat(k[4])
-  }));
-  
-  const chartConfig = {
-      type: 'candlestick',
-      data: { datasets: [{ label: 'BTC/USDT', data: chartData }] },
-      options: {
-          legend: { display: false },
-          scales: {
-              x: { ticks: { color: '#fff' }, grid: { color: 'rgba(255, 255, 255, 0.1)' } },
-              y: { ticks: { color: '#fff' }, grid: { color: 'rgba(255, 255, 255, 0.1)' } }
-          }
-      }
-  };
-  const url = `https://quickchart.io/chart?w=600&h=400&bkg=1e1e1e&c=${encodeURIComponent(JSON.stringify(chartConfig))}`;
-  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️", "main_menu")]]);
-  await ctx.deleteMessage().catch(()=>{});
-  await ctx.replyWithPhoto({url}, {caption: "📊 *BTC/USD* (30 kunlik haqiqiy shamcha grafik)", parse_mode: "Markdown", reply_markup: markup.reply_markup});
+  const msg = "📈 *BTC/USD haqiqiy interaktiv grafigini ko'rish uchun quyidagi tugmani bosing:*";
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.url("📈 TradingView orqali ko'rish", "https://ru.tradingview.com/symbols/BTCUSD/")],
+    [Markup.button.callback("⬅️ Orqaga", "main_menu")]
+  ]);
+  if (ctx.callbackQuery) {
+      await ctx.editMessageText(msg, {parse_mode: "Markdown", reply_markup: markup.reply_markup}).catch(()=>{});
+  } else {
+      await ctx.replyWithMarkdown(msg, markup);
+  }
 });
 
 async function sendStats(ctx) {
@@ -452,7 +450,7 @@ async function sendWallet(ctx) {
   const cryptoData = cryptoCache || {};
 
   const rateUsd = usdData ? parseFloat(usdData.Rate) : 12600;
-  const prices = { usd: 1, btc: cryptoData.bitcoin?.usd || 0, eth: cryptoData.ethereum?.usd || 0, ton: cryptoData["the-open-network"]?.usd || 0 };
+  const prices = { usd: 1, btc: cryptoData.BTCUSDT || 0, eth: cryptoData.ETHUSDT || 0, ton: cryptoData.TONUSDT || 0 };
 
   let totalUsd = 0;
   let assetsText = "";
@@ -474,6 +472,7 @@ async function sendWallet(ctx) {
 }
 bot.action("wallet", sendWallet);
 bot.hears(/(💼|Hamyon|Кошелек|Wallet)/i, sendWallet);
+bot.hears(/(⏰|Bildirish|Xabarnoma yozish)/i, (ctx) => ctx.scene.enter('schedule-wizard'));
 
 async function sendAlertsMenu(ctx) {
   const userId = ctx.from.id;
@@ -568,7 +567,7 @@ cron.schedule("* * * * *", async () => {
                const currency = await getCurrency(a.code);
                if(currency) msg = `⏰ *Belgilangan xabarnoma!* (${a.time})\n\n💰 1 ${a.code} = *${currency.Rate}* UZS\n📊 O'zgarish: ${currency.Diff > 0 ? '+' : ''}${currency.Diff}`;
            } else {
-               const price = cryptoCache[a.code.toLowerCase()]?.usd || (a.code === 'BTC' ? cryptoCache.bitcoin?.usd : null) || (a.code === 'ETH' ? cryptoCache.ethereum?.usd : null);
+               const price = (a.code === 'BTC' ? cryptoCache.BTCUSDT : null) || (a.code === 'ETH' ? cryptoCache.ETHUSDT : null) || (a.code === 'PAXG' ? cryptoCache.PAXGUSDT : null);
                if(price) msg = `⏰ *Belgilangan xabarnoma!* (${a.time})\n\n💰 1 ${a.code} = *$${price}*`;
            }
            if (msg) bot.telegram.sendMessage(user.userId, msg, {parse_mode: "Markdown"}).catch(()=>{});
@@ -584,7 +583,7 @@ cron.schedule("*/5 * * * *", async () => {
 
     const usdData = await getCurrency("USD");
     const cryptoData = cryptoCache || {};
-    const prices = { usd: usdData ? parseFloat(usdData.Rate) : 0, btc: cryptoData.bitcoin?.usd || 0 };
+    const prices = { usd: usdData ? parseFloat(usdData.Rate) : 0, btc: cryptoData.BTCUSDT || 0, eth: cryptoData.ETHUSDT || 0, paxg: cryptoData.PAXGUSDT || 0 };
 
     for (const user of users) {
       let triggered = [];
