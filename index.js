@@ -24,7 +24,7 @@ const ADMIN_ID = process.env.ADMIN_ID;
 const scheduleWizard = new Scenes.WizardScene(
   'schedule-wizard',
   (ctx) => {
-    ctx.reply("🔔 Qaysi valyuta bo'yicha eslatma olmoqchisiz?\nMasalan: USD, EUR, BTC, ETH yoki Oltin", Markup.keyboard([['USD', 'EUR', 'RUB'], ['BTC', 'ETH', 'Oltin']]).oneTime().resize());
+    ctx.reply("🔔 Qaysi valyuta bo'yicha eslatma olmoqchisiz?\nMasalan: USD, EUR, BTC, ETH yoki Oltin", Markup.keyboard([['USD', 'EUR', 'RUB'], ['BTC', 'ETH', 'Oltin'], ['Barchasi']]).oneTime().resize());
     return ctx.wizard.next();
   },
   (ctx) => {
@@ -48,7 +48,7 @@ const scheduleWizard = new Scenes.WizardScene(
     await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts: filteredAlerts });
     
     const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Asosiy menyuga qaytish", "main_menu")]]);
-    ctx.reply(`✅ Eslatma muvaffaqiyatli saqlandi!\n\nHar kuni soat ${time} da ${code} narxi yuboriladi.`, markup);
+    ctx.reply(`✅ Eslatma muvaffaqiyatli saqlandi!\n\nHar kuni soat ${time} da ${code === 'BARCHASI' ? 'barcha valyutalar' : code === 'PAXG' ? 'Oltin' : code} narxi yuboriladi.`, markup);
     return ctx.scene.leave();
   }
 );
@@ -655,9 +655,26 @@ cron.schedule("* * * * *", async () => {
            if (['USD', 'EUR', 'RUB'].includes(a.code)) {
                const currency = await getCurrency(a.code);
                if(currency) msg = `⏰ *Eslatma!* (${a.time})\n\n💰 1 ${a.code} = *${currency.Rate}* UZS\n📊 O'zgarish: ${currency.Diff > 0 ? '+' : ''}${currency.Diff}`;
+           } else if (a.code === 'BARCHASI') {
+               const usd = await getCurrency('USD');
+               const eur = await getCurrency('EUR');
+               const rub = await getCurrency('RUB');
+               msg = `⏰ *Barcha Valyutalar Eslatmasi!* (${a.time})\n\n`;
+               if(usd) msg += `🇺🇸 1 USD = *${usd.Rate}* UZS\n`;
+               if(eur) msg += `🇪🇺 1 EUR = *${eur.Rate}* UZS\n`;
+               if(rub) msg += `🇷🇺 1 RUB = *${rub.Rate}* UZS\n\n`;
+               if(cryptoCache && cryptoCache['BTC-USDT']) msg += `🟠 1 BTC = *$${formatMoney(cryptoCache['BTC-USDT'])}*\n`;
+               if(cryptoCache && cryptoCache['ETH-USDT']) msg += `🔷 1 ETH = *$${formatMoney(cryptoCache['ETH-USDT'])}*\n`;
+               if(cryptoCache && cryptoCache['PAXG-USDT']) msg += `🪙 1 Gram Oltin (999 proba) = *$${formatMoney(cryptoCache['PAXG-USDT'] / 31.1035)}*\n`;
            } else {
                const price = (a.code === 'BTC' ? cryptoCache['BTC-USDT'] : null) || (a.code === 'ETH' ? cryptoCache['ETH-USDT'] : null) || (a.code === 'PAXG' ? cryptoCache['PAXG-USDT'] : null);
-               if(price) msg = `⏰ *Eslatma!* (${a.time})\n\n💰 1 ${a.code} = *$${price}*`;
+               if(price) {
+                  if (a.code === 'PAXG') {
+                     msg = `⏰ *Eslatma!* (${a.time})\n\n🪙 1 Gram Oltin (999 proba) = *$${formatMoney(price / 31.1035)}*\n⚖️ 1 Unsiya (Troy) = *$${formatMoney(price)}*`;
+                  } else {
+                     msg = `⏰ *Eslatma!* (${a.time})\n\n💰 1 ${a.code} = *$${formatMoney(price)}*`;
+                  }
+               }
            }
            if (msg) bot.telegram.sendMessage(user.userId, msg, {parse_mode: "Markdown"}).catch(()=>{});
         }
