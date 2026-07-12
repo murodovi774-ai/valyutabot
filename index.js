@@ -52,7 +52,38 @@ const scheduleWizard = new Scenes.WizardScene(
     return ctx.scene.leave();
   }
 );
-const stage = new Scenes.Stage([scheduleWizard]);
+const broadcastWizard = new Scenes.WizardScene(
+  'broadcast-wizard',
+  (ctx) => {
+    ctx.reply("✉️ Barcha foydalanuvchilarga yuboriladigan xabarni kiriting (Rasm, video yoki matn):", Markup.inlineKeyboard([[Markup.button.callback("❌ Bekor qilish", "admin_cancel")]]));
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    if (ctx.message) {
+      const msgId = ctx.message.message_id;
+      const users = await User.find({});
+      let success = 0;
+      let fail = 0;
+      const statusMsg = await ctx.reply("⏳ Xabar tarqatilmoqda... Bu biroz vaqt olishi mumkin.");
+      
+      for (const u of users) {
+          try {
+             await ctx.telegram.copyMessage(u.userId, ctx.chat.id, msgId);
+             success++;
+             await new Promise(r => setTimeout(r, 40));
+          } catch(e) { fail++; }
+      }
+      
+      await ctx.telegram.editMessageText(ctx.chat.id, statusMsg.message_id, undefined, `✅ Xabar tarqatish tugatildi!\n\nYetib bordi: ${success} ta\nYetib bormadi (bloklaganlar): ${fail} ta`);
+      return ctx.scene.leave();
+    } else {
+      ctx.reply("❌ Xatolik yuz berdi. Faqat matn yoki media yuboring.");
+      return ctx.scene.leave();
+    }
+  }
+);
+
+const stage = new Scenes.Stage([scheduleWizard, broadcastWizard]);
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -435,6 +466,29 @@ async function sendStats(ctx) {
 }
 bot.action("stats", sendStats);
 bot.hears(/^(📈 Statistika|📈 Статистика|📈 Stats|📈|Statistika|Статистика|Stats)$/i, sendStats);
+// ============================================================
+// 👑 ADMIN PANEL
+// ============================================================
+bot.command("admin", async (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  const msg = "👑 *Admin Panelga Xush Kelibsiz*\n\nNima amaliyot bajaramiz?";
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("📊 Statistika", "stats"), Markup.button.callback("✉️ Xabar Tarqatish", "admin_broadcast")]
+  ]);
+  await ctx.replyWithMarkdown(msg, markup);
+});
+
+bot.action("admin_broadcast", (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  ctx.scene.enter("broadcast-wizard");
+});
+
+bot.action("admin_cancel", async (ctx) => {
+  if (ctx.from.id.toString() !== ADMIN_ID) return;
+  await ctx.answerCbQuery("Bekor qilindi.");
+  await ctx.editMessageText("❌ Xabar tarqatish bekor qilindi.");
+  ctx.scene.leave();
+});
 
 // ============================================================
 // 🧮 KALKULYATOR (Universal Regex)
@@ -456,14 +510,24 @@ bot.hears(calcRegex, async (ctx) => {
   let currency = ctx.match[2].toUpperCase();
   
   let cleaned = strAmount.replace(/\s/g, '');
-  if(cleaned.indexOf(',') > -1 && cleaned.indexOf('.') > -1) {
-    cleaned = cleaned.replace(/,/g, '');
-  } else {
-    cleaned = cleaned.replace(/,/g, '.');
-  }
-  const parts = cleaned.split('.');
-  if(parts.length > 2) {
-    cleaned = parts.slice(0, -1).join('') + '.' + parts[parts.length - 1];
+  if (cleaned.includes(',') && cleaned.includes('.')) {
+      const lastComma = cleaned.lastIndexOf(',');
+      const lastDot = cleaned.lastIndexOf('.');
+      if (lastDot > lastComma) {
+          cleaned = cleaned.replace(/,/g, '');
+      } else {
+          cleaned = cleaned.replace(/\./g, '').replace(/,/g, '.');
+      }
+  } else if (cleaned.includes(',') || cleaned.includes('.')) {
+      const sep = cleaned.includes(',') ? ',' : '.';
+      const parts = cleaned.split(sep);
+      if (parts[parts.length - 1].length === 3) {
+          cleaned = cleaned.replace(new RegExp('\\' + sep, 'g'), '');
+      } else {
+          cleaned = cleaned.replace(new RegExp('\\' + sep, 'g'), '.');
+          const p = cleaned.split('.');
+          if (p.length > 2) cleaned = p.slice(0, -1).join('') + '.' + p[p.length - 1];
+      }
   }
   const amount = parseFloat(cleaned);
   if (isNaN(amount) || amount <= 0) return;
@@ -507,7 +571,8 @@ bot.hears(calcRegex, async (ctx) => {
   if (currency !== 'ETH') msg += `🔷 ETH: *${formatSmallMoney(usdValue / rates.ETH)}*\n`;
   if (currency !== 'TON') msg += `💎 TON: *${formatSmallMoney(usdValue / rates.TON)}*\n`;
 
-  await ctx.replyWithMarkdown(msg);
+  const markup = Markup.inlineKeyboard([[Markup.button.callback("⬅️ Asosiy menyuga qaytish", "main_menu")]]);
+  await ctx.replyWithMarkdown(msg, markup);
 });
 
 // ============================================================
