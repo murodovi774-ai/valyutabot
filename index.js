@@ -1,3 +1,5 @@
+const dns = require("dns");
+try { dns.setServers(["8.8.8.8", "1.1.1.1"]); } catch(e) {}
 require("dotenv").config();
 const { Telegraf, Markup, session, Scenes } = require("telegraf");
 const axios = require("axios");
@@ -22,6 +24,10 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 const ADMIN_ID = process.env.ADMIN_ID;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || null;
 
+bot.catch((err, ctx) => {
+  console.error(`⚠️ Bot update xatosi [${ctx?.updateType}]:`, err.message);
+});
+
 // ============================================================
 // 💾 MONGODB BAZASI
 // ============================================================
@@ -39,22 +45,39 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model("User", userSchema);
 
 mongoose
-  .connect(process.env.MONGODB_URI || "mongodb://localhost:27017/valyutabot")
+  .connect(process.env.MONGODB_URI || "mongodb://localhost:27017/valyutabot", {
+    serverSelectionTimeoutMS: 5000,
+    connectTimeoutMS: 5000
+  })
   .then(() => console.log("✅ MongoDB bazasiga muvaffaqiyatli ulandi!"))
   .catch((err) => console.error("⚠️ MongoDB xatosi:", err.message));
 
+const userCache = new Map();
 async function getUser(userId) {
-  let user = await User.findOne({ userId });
-  if (!user) {
-    user = await User.create({ userId });
+  if (userCache.has(userId)) {
+    return userCache.get(userId);
   }
-  return user;
+  try {
+    if (mongoose.connection.readyState === 1) {
+      let user = await User.findOne({ userId }).maxTimeMS(2500);
+      if (!user) {
+        user = await User.create({ userId });
+      }
+      const userObj = user.toObject ? user.toObject() : user;
+      userCache.set(userId, userObj);
+      setTimeout(() => userCache.delete(userId), 60000);
+      return userObj;
+    }
+  } catch (err) {
+    console.error("getUser xatosi:", err.message);
+  }
+  return { userId, lang: "uz", favorites: ["USD", "BTC", "PAXG"], scheduledAlerts: [], priceAlerts: [], investments: [] };
 }
 
 async function t(userId, key, params = {}) {
   const user = await getUser(userId);
   const lang = user.lang || "uz";
-  let text = i18n[lang]?.[key] || i18n["uz"][key] || key;
+  let text = i18n[lang]?.[key] || i18n["uz"]?.[key] || key;
   for (const [k, v] of Object.entries(params)) {
     text = text.replace(new RegExp(`{${k}}`, "g"), v);
   }
@@ -676,45 +699,75 @@ const stage = new Scenes.Stage([scheduleWizard, priceAlertWizard, addInvestmentW
 bot.use(session());
 bot.use(stage.middleware());
 
+// /start yozilganda istalgan faol sahnadan chiqish
+bot.use(async (ctx, next) => {
+  if (ctx.message?.text?.startsWith("/start") && ctx.scene) {
+    try { await ctx.scene.leave(); } catch(e) {}
+  }
+  return next();
+});
+
 // ============================================================
 // 🚀 ASOSIY MENYU VA NAVIGATSIYA
 // ============================================================
 async function sendMainMenu(ctx) {
-  const userId = ctx.from.id;
-  const name = ctx.from.first_name || "Foydalanuvchi";
-  
-  const menu = Markup.inlineKeyboard([
-    [Markup.button.webApp("📱 ValyutaUZ Mini App", WEBAPP_URL)],
-    [Markup.button.callback(await t(userId, "btn_usd"), "rate_USD"), Markup.button.callback(await t(userId, "btn_eur"), "rate_EUR"), Markup.button.callback(await t(userId, "btn_rub"), "rate_RUB")],
-    [Markup.button.callback(await t(userId, "btn_gold"), "gold"), Markup.button.callback(await t(userId, "btn_crypto"), "crypto")],
-    [Markup.button.callback(await t(userId, "btn_forecast"), "forecast")],
-    [Markup.button.callback(await t(userId, "btn_banks"), "banks"), Markup.button.callback(await t(userId, "btn_calc"), "calculator")],
-    [Markup.button.callback(await t(userId, "btn_wallet"), "wallet"), Markup.button.callback(await t(userId, "btn_favorites"), "favorites_menu")],
-    [Markup.button.callback(await t(userId, "btn_alerts"), "alerts"), Markup.button.callback(await t(userId, "btn_strategy"), "strategy_menu")],
-    [Markup.button.callback(await t(userId, "btn_ai"), "ai_advisor"), Markup.button.callback(await t(userId, "btn_chart"), "chart_menu")],
-    [Markup.button.callback("🌐 Til", "cmd_lang"), Markup.button.callback(await t(userId, "btn_stats"), "stats")]
-  ]);
+  try {
+    const userId = ctx.from.id;
+    const name = ctx.from.first_name || "Foydalanuvchi";
+    const user = await getUser(userId);
+    const lang = user.lang || "uz";
 
-  const msg = await t(userId, "start", { name });
-  
-  if (ctx.callbackQuery) {
-    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: menu.reply_markup }); } 
-    catch(e) { await ctx.replyWithMarkdown(msg, menu); }
-  } else {
-    await ctx.replyWithMarkdown(msg, menu);
+    const tr = (key, params = {}) => {
+      let text = i18n[lang]?.[key] || i18n["uz"]?.[key] || key;
+      for (const [k, v] of Object.entries(params)) {
+        text = text.replace(new RegExp(`{${k}}`, "g"), v);
+      }
+      return text;
+    };
+    
+    const menu = Markup.inlineKeyboard([
+      [Markup.button.webApp("📱 ValyutaUZ Mini App", WEBAPP_URL)],
+      [Markup.button.callback(tr("btn_usd"), "rate_USD"), Markup.button.callback(tr("btn_eur"), "rate_EUR"), Markup.button.callback(tr("btn_rub"), "rate_RUB")],
+      [Markup.button.callback(tr("btn_gold"), "gold"), Markup.button.callback(tr("btn_crypto"), "crypto")],
+      [Markup.button.callback(tr("btn_forecast"), "forecast")],
+      [Markup.button.callback(tr("btn_banks"), "banks"), Markup.button.callback(tr("btn_calc"), "calculator")],
+      [Markup.button.callback(tr("btn_wallet"), "wallet"), Markup.button.callback(tr("btn_favorites"), "favorites_menu")],
+      [Markup.button.callback(tr("btn_alerts"), "alerts"), Markup.button.callback(tr("btn_strategy"), "strategy_menu")],
+      [Markup.button.callback(tr("btn_ai"), "ai_advisor"), Markup.button.callback(tr("btn_chart"), "chart_menu")],
+      [Markup.button.callback("🌐 Til", "cmd_lang"), Markup.button.callback(tr("btn_stats"), "stats")]
+    ]);
+
+    const msg = tr("start", { name });
+    
+    if (ctx.callbackQuery) {
+      try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: menu.reply_markup }); } 
+      catch(e) { await ctx.replyWithMarkdown(msg, menu); }
+    } else {
+      await ctx.replyWithMarkdown(msg, menu);
+    }
+  } catch(err) {
+    console.error("sendMainMenu xatosi:", err.message);
   }
 }
 
 bot.start(async (ctx) => {
-  await getUser(ctx.from.id);
-  ctx.reply(
-    "🌍 Iltimos, tilni tanlang:\n🇷🇺 Пожалуйста, выберите язык:\n🇬🇧 Please choose a language:",
-    Markup.inlineKeyboard([
-      [Markup.button.callback("🇺🇿 O'zbekcha", "lang_uz")],
-      [Markup.button.callback("🇷🇺 Русский", "lang_ru")],
-      [Markup.button.callback("🇬🇧 English", "lang_en")]
-    ])
-  );
+  try {
+    if (ctx.scene) {
+      try { await ctx.scene.leave(); } catch(e) {}
+    }
+    await getUser(ctx.from.id);
+    await ctx.reply(
+      "🌍 Iltimos, tilni tanlang:\n🇷🇺 Пожалуйста, выберите язык:\n🇬🇧 Please choose a language:",
+      Markup.inlineKeyboard([
+        [Markup.button.callback("🇺🇿 O'zbekcha", "lang_uz")],
+        [Markup.button.callback("🇷🇺 Русский", "lang_ru")],
+        [Markup.button.callback("🇬🇧 English", "lang_en")]
+      ])
+    );
+  } catch(err) {
+    console.error("bot.start xatosi:", err.message);
+    try { await sendMainMenu(ctx); } catch(e) {}
+  }
 });
 
 bot.command("lang", (ctx) => {
@@ -2135,6 +2188,15 @@ const app = express();
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/webapp", express.static(path.join(__dirname, "public")));
 
+app.get("/api/status", (req, res) => {
+  res.json({
+    status: "ok",
+    bot: "online",
+    db: mongoose.connection.readyState === 1 ? "connected" : "connecting",
+    time: getTimeStr()
+  });
+});
+
 app.get("/api/rates", (req, res) => {
   res.json({
     cbu: cbuCache || [],
@@ -2148,23 +2210,26 @@ app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
+// Render uxlamasligi uchun har 8 daqiqada o'zini-o'zi ping qiladi
+setInterval(() => {
+  axios.get("https://valyutauz-bot.onrender.com/api/status").catch(() => {});
+}, 8 * 60 * 1000);
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Keep-Alive & Mini App server ${PORT}-portda ishga tushdi.`);
-  setTimeout(() => {
-    bot.launch({ dropPendingUpdates: true })
-      .then(() => {
-        console.log("✅ ValyutaUZ Bot V5 Ultra-Smart & Mini App muvaffaqiyatli ishga tushdi!");
-        bot.telegram.setChatMenuButton({
-          menuButton: {
-            type: "web_app",
-            text: "Mini App",
-            web_app: { url: WEBAPP_URL }
-          }
-        }).catch(()=>{});
-      })
-      .catch((err) => console.error("Bot launch xatosi:", err.message));
-  }, 3000);
+  bot.launch()
+    .then(() => {
+      console.log("✅ ValyutaUZ Bot V5 Ultra-Smart & Mini App muvaffaqiyatli ishga tushdi!");
+      bot.telegram.setChatMenuButton({
+        menuButton: {
+          type: "web_app",
+          text: "Mini App",
+          web_app: { url: WEBAPP_URL }
+        }
+      }).catch(()=>{});
+    })
+    .catch((err) => console.error("Bot launch xatosi:", err.message));
 });
 
 process.once("SIGINT", () => bot.stop("SIGINT"));
