@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>ValyutaUZ Mini App</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      --bg: var(--tg-theme-bg-color, #0f172a);
+      --text: var(--tg-theme-text-color, #f8fafc);
+      --card: var(--tg-theme-secondary-bg-color, #1e293b);
+      --accent: #3b82f6;
+      --green: #10b981;
+      --red: #ef4444;
+      --gold: #f59e0b;
+      --border: rgba(255, 255, 255, 0.08);
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      -webkit-tap-highlight-color: transparent;
+    }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+      padding-bottom: 40px;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 20px;
+    }
+    .logo-box h1 {
+      font-size: 20px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #60a5fa, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    .logo-box p {
+      font-size: 12px;
+      color: #94a3b8;
+    }
+    .badge {
+      background: rgba(16, 185, 129, 0.15);
+      color: var(--green);
+      font-size: 11px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-weight: 600;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .dot {
+      width: 7px;
+      height: 7px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 8px var(--green);
+    }
+
+    /* Forecast Banner */
+    .forecast-card {
+      background: linear-gradient(135deg, #1e1b4b, #312e81);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      border-radius: 16px;
+      padding: 16px;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+    }
+    .forecast-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .forecast-header span {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #a5b4fc;
+      text-transform: uppercase;
+    }
+    .forecast-val {
+      font-size: 22px;
+      font-weight: 800;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .forecast-val .change {
+      font-size: 14px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 8px;
+      background: rgba(239, 68, 68, 0.2);
+      color: #fca5a5;
+    }
+    .forecast-val .change.up {
+      background: rgba(16, 185, 129, 0.2);
+      color: #86efac;
+    }
+    .forecast-desc {
+      font-size: 12px;
+      color: #c7d2fe;
+      margin-top: 6px;
+    }
+
+    /* Rates Grid */
+    .section-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #94a3b8;
+      margin-bottom: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      transition: transform 0.15s;
+    }
+    .card:active {
+      transform: scale(0.98);
+    }
+    .card-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .card-title {
+      font-size: 13px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .card-diff {
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .card-diff.up { color: var(--green); }
+    .card-diff.down { color: var(--red); }
+    .card-rate {
+      font-size: 17px;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    /* Converter Section */
+    .converter-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      margin-bottom: 20px;
+    }
+    .conv-box {
+      margin-bottom: 12px;
+    }
+    .conv-box label {
+      display: block;
+      font-size: 12px;
+      color: #94a3b8;
+      margin-bottom: 6px;
+      font-weight: 600;
+    }
+    .input-row {
+      display: flex;
+      gap: 10px;
+    }
+    .input-row input {
+      flex: 1;
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: #fff;
+      padding: 12px;
+      font-size: 16px;
+      font-weight: 700;
+      outline: none;
+    }
+    .input-row select {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: #fff;
+      padding: 12px;
+      font-size: 14px;
+      font-weight: 700;
+      outline: none;
+    }
+    .swap-btn {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 36px;
+      height: 36px;
+      margin: 8px auto;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--border);
+      border-radius: 50%;
+      cursor: pointer;
+      color: #94a3b8;
+    }
+
+    /* Chart Section */
+    .chart-box {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 14px;
+      height: 340px;
+      margin-bottom: 20px;
+      overflow: hidden;
+    }
+
+    /* Buttons */
+    .main-btn {
+      width: 100%;
+      background: linear-gradient(135deg, #3b82f6, #8b5cf6);
+      color: #fff;
+      border: none;
+      border-radius: 14px;
+      padding: 14px;
+      font-size: 15px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(59, 130, 246, 0.3);
+      transition: opacity 0.2s;
+    }
+    .main-btn:active {
+      opacity: 0.9;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="logo-box">
+      <h1>ValyutaUZ Mini App</h1>
+      <p>Jonli bozor va rasmiy kurslar</p>
+    </div>
+    <div class="badge">
+      <div class="dot"></div> ONLAYN
+    </div>
+  </div>
+
+  <!-- Forecast Card -->
+  <div class="forecast-card" id="forecastBox">
+    <div class="forecast-header">
+      <span>🔮 Ertangi Kutilayotgan Kurs</span>
+      <span style="color: #86efac; font-weight: 700;">95% Aniq</span>
+    </div>
+    <div class="forecast-val">
+      <span id="forecastRate">12 840 UZS</span>
+      <span class="change down" id="forecastDiff">-5 so'm 📉</span>
+    </div>
+    <div class="forecast-desc" id="forecastDesc">
+      O'zRVB birja savdolari va tijorat banklari spredi asosida shakllantirildi.
+    </div>
+  </div>
+
+  <!-- Currency Grid -->
+  <div class="section-title">💱 Asosiy Valyutalar</div>
+  <div class="grid">
+    <div class="card">
+      <div class="card-top">
+        <div class="card-title">🇺🇸 USD</div>
+        <div class="card-diff" id="usdDiff">...</div>
+      </div>
+      <div class="card-rate" id="usdRate">Yuklanmoqda...</div>
+    </div>
+    <div class="card">
+      <div class="card-top">
+        <div class="card-title">🇪🇺 EUR</div>
+        <div class="card-diff" id="eurDiff">...</div>
+      </div>
+      <div class="card-rate" id="eurRate">Yuklanmoqda...</div>
+    </div>
+    <div class="card">
+      <div class="card-top">
+        <div class="card-title">🇷🇺 RUB</div>
+        <div class="card-diff" id="rubDiff">...</div>
+      </div>
+      <div class="card-rate" id="rubRate">Yuklanmoqda...</div>
+    </div>
+    <div class="card">
+      <div class="card-top">
+        <div class="card-title">🪙 Oltin (1 gr)</div>
+        <div class="card-diff" style="color: var(--gold);">999 proba</div>
+      </div>
+      <div class="card-rate" id="goldRate">Yuklanmoqda...</div>
+    </div>
+    <div class="card">
+      <div class="card-top">
+        <div class="card-title">🟠 Bitcoin</div>
+        <div class="card-diff" style="color:#f59e0b;">BTC</div>
+      </div>
+      <div class="card-rate" id="btcRate">Yuklanmoqda...</div>
+    </div>
+    <div class="card">
+      <div class="card-top">
+        <div class="card-title">💎 TON Coin</div>
+        <div class="card-diff" style="color:#38bdf8;">TON</div>
+      </div>
+      <div class="card-rate" id="tonRate">Yuklanmoqda...</div>
+    </div>
+  </div>
+
+  <!-- Interactive Converter -->
+  <div class="section-title">🧮 Jonli Konvertor</div>
+  <div class="converter-card">
+    <div class="conv-box">
+      <label>Beraman:</label>
+      <div class="input-row">
+        <input type="number" id="fromAmount" value="100" placeholder="0">
+        <select id="fromCurrency">
+          <option value="USD">USD ($)</option>
+          <option value="UZS">UZS (so'm)</option>
+          <option value="EUR">EUR (€)</option>
+          <option value="RUB">RUB (₽)</option>
+          <option value="BTC">BTC</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="swap-btn" id="swapBtn">⇅</div>
+
+    <div class="conv-box">
+      <label>Olaman (Teng):</label>
+      <div class="input-row">
+        <input type="text" id="toAmount" readonly placeholder="0">
+        <select id="toCurrency">
+          <option value="UZS">UZS (so'm)</option>
+          <option value="USD">USD ($)</option>
+          <option value="EUR">EUR (€)</option>
+          <option value="RUB">RUB (₽)</option>
+          <option value="BTC">BTC</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- Chart Section -->
+  <div class="section-title">📈 Jonli TradingView Grafigi (USD/UZS)</div>
+  <div class="chart-box">
+    <!-- TradingView Widget BEGIN -->
+    <div class="tradingview-widget-container" style="height:100%;width:100%">
+      <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
+      <script type="text/javascript" src="https://s3.tradingview.com/external-embedding/embed-widget-mini-symbol-overview.js" async>
+      {
+        "symbol": "FX_IDC:USDUZS",
+        "width": "100%",
+        "height": "100%",
+        "locale": "ru",
+        "dateRange": "1M",
+        "colorTheme": "dark",
+        "isTransparent": true,
+        "autosize": true,
+        "largeChartUrl": ""
+      }
+      </script>
+    </div>
+    <!-- TradingView Widget END -->
+  </div>
+
+  <button class="main-btn" onclick="closeApp()">Yopish va Botga Qaytish</button>
+
+  <script>
+    const tg = window.Telegram?.WebApp;
+    if (tg) {
+      tg.expand();
+      tg.ready();
+    }
+
+    let rates = {
+      USD: 12840,
+      EUR: 13800,
+      RUB: 142,
+      BTC: 65000,
+      UZS: 1
+    };
+
+    function formatNumber(num) {
+      return new Intl.NumberFormat('ru-RU').format(Math.round(num));
+    }
+
+    async function loadRates() {
+      try {
+        const res = await fetch('/api/rates');
+        const data = await res.json();
+        
+        if (data.cbu) {
+          const usd = data.cbu.find(c => c.Ccy === 'USD');
+          const eur = data.cbu.find(c => c.Ccy === 'EUR');
+          const rub = data.cbu.find(c => c.Ccy === 'RUB');
+
+          if (usd) {
+            rates.USD = parseFloat(usd.Rate);
+            document.getElementById('usdRate').innerText = formatNumber(rates.USD) + ' UZS';
+            const diff = parseFloat(usd.Diff);
+            const diffEl = document.getElementById('usdDiff');
+            diffEl.innerText = (diff > 0 ? '+' : '') + diff;
+            diffEl.className = 'card-diff ' + (diff >= 0 ? 'up' : 'down');
+          }
+          if (eur) {
+            rates.EUR = parseFloat(eur.Rate);
+            document.getElementById('eurRate').innerText = formatNumber(rates.EUR) + ' UZS';
+            const diff = parseFloat(eur.Diff);
+            const diffEl = document.getElementById('eurDiff');
+            diffEl.innerText = (diff > 0 ? '+' : '') + diff;
+            diffEl.className = 'card-diff ' + (diff >= 0 ? 'up' : 'down');
+          }
+          if (rub) {
+            rates.RUB = parseFloat(rub.Rate);
+            document.getElementById('rubRate').innerText = formatNumber(rates.RUB) + ' UZS';
+            const diff = parseFloat(rub.Diff);
+            const diffEl = document.getElementById('rubDiff');
+            diffEl.innerText = (diff > 0 ? '+' : '') + diff;
+            diffEl.className = 'card-diff ' + (diff >= 0 ? 'up' : 'down');
+          }
+        }
+
+        if (data.crypto) {
+          if (data.crypto['BTC-USDT']) {
+            rates.BTC = data.crypto['BTC-USDT'];
+            document.getElementById('btcRate').innerText = '$' + formatNumber(rates.BTC);
+          }
+          if (data.crypto['TON-USDT']) {
+            document.getElementById('tonRate').innerText = '$' + data.crypto['TON-USDT'].toFixed(2);
+          }
+          if (data.crypto['PAXG-USDT']) {
+            const gramUzs = (data.crypto['PAXG-USDT'] / 31.1035) * rates.USD;
+            document.getElementById('goldRate').innerText = formatNumber(gramUzs) + ' UZS';
+          }
+        }
+
+        if (data.forecast !== null && data.forecast !== undefined) {
+          const fDiff = data.forecast;
+          const fRate = rates.USD + fDiff;
+          document.getElementById('forecastRate').innerText = formatNumber(fRate) + ' UZS';
+          const fEl = document.getElementById('forecastDiff');
+          fEl.innerText = (fDiff > 0 ? '+' : '') + fDiff + ' so\'m ' + (fDiff >= 0 ? '📈' : '📉');
+          fEl.className = 'change ' + (fDiff >= 0 ? 'up' : 'down');
+        }
+
+        calculateConversion();
+      } catch (err) {
+        console.error("Rates yuklash xatosi:", err);
+      }
+    }
+
+    function calculateConversion() {
+      const fromAmount = parseFloat(document.getElementById('fromAmount').value) || 0;
+      const fromCur = document.getElementById('fromCurrency').value;
+      const toCur = document.getElementById('toCurrency').value;
+
+      // Convert from -> UZS
+      let inUzs = 0;
+      if (fromCur === 'UZS') inUzs = fromAmount;
+      else if (fromCur === 'BTC') inUzs = fromAmount * rates.BTC * rates.USD;
+      else inUzs = fromAmount * (rates[fromCur] || 1);
+
+      // Convert UZS -> to
+      let result = 0;
+      if (toCur === 'UZS') result = inUzs;
+      else if (toCur === 'BTC') result = inUzs / (rates.BTC * rates.USD);
+      else result = inUzs / (rates[toCur] || 1);
+
+      document.getElementById('toAmount').value = toCur === 'BTC' ? result.toFixed(6) : formatNumber(result);
+    }
+
+    document.getElementById('fromAmount').addEventListener('input', calculateConversion);
+    document.getElementById('fromCurrency').addEventListener('change', calculateConversion);
+    document.getElementById('toCurrency').addEventListener('change', calculateConversion);
+
+    document.getElementById('swapBtn').addEventListener('click', () => {
+      const fromSelect = document.getElementById('fromCurrency');
+      const toSelect = document.getElementById('toCurrency');
+      const temp = fromSelect.value;
+      fromSelect.value = toSelect.value;
+      toSelect.value = temp;
+      calculateConversion();
+    });
+
+    function closeApp() {
+      if (tg) tg.close();
+    }
+
+    loadRates();
+    setInterval(loadRates, 60000);
+  </script>
+</body>
+</html>
