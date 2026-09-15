@@ -1,6 +1,6 @@
 module.exports = {
   uz: {
-    start: "✨ *Xush kelibsiz, {name}!* 👋\n\n📌 *ValyutaUZ Bot V3* — Real vaqt valyuta, oltin, kripto kurslari va ertangi kun prognozlari.\n\nQuyidagi menyulardan birini tanlang:",
+    start: "✨ *Xush kelibsiz, {name}!* 👋\n\n📌 *ValyutaUZ Bot V4 Pro* — Real vaqt valyuta, oltin, kripto kurslari, ertangi kun aniq prognozlari va maksimal foyda kalkulyatori.\n\nQuyidagi menyulardan birini tanlang:",
     lang_changed: "🇺🇿 Til O'zbek tiliga o'zgardi!",
     btn_usd: "🇺🇸 USD",
     btn_eur: "🇪🇺 EUR",
@@ -13,10 +13,11 @@ module.exports = {
     btn_alerts: "⏰ Eslatmalar",
     btn_stats: "📈 Statistika",
     btn_forecast: "🔮 Ertangi kutilayotgan kurs",
-    btn_ai: "🤖 AI Maslahatchi",
-    btn_calc: "🧮 Kalkulyator",
+    btn_ai: "🤖 AI Moliyaviy Maslahatchi",
+    btn_calc: "🧮 Maksimal Foyda Kalkulyatori",
     btn_back: "⬅️ Orqaga",
     btn_menu: "🏠 Asosiy menyu",
+    btn_share: "📲 Do'stlarga ulashish",
     wait: "⏳ Ma'lumot tahlil qilinmoqda...",
     refresh: "🔄 Yangilash",
     rate_msg: "{flag} *{code} / UZS kursi*\n\n💰 1 {code} = *{rate}* UZS\n\n📊 O'zgarish: {diffText}\n🗓 Sana: *{time}*\n\n🏛 _Markaziy Bank rasmiy kursi_",
@@ -42,7 +43,7 @@ module.exports = {
     calc_result_other: "🧮 *Hisob-kitob ({code})*\n\n💵 *{amount} {code}* = *{uzs}* UZS 🇺🇿\n\n_Kurs: 1 {code} = {rate} so'm_"
   },
   ru: {
-    start: "✨ *Добро пожаловать, {name}!* 👋\n\n📌 *ValyutaUZ Bot V3* — Курсы валют, золота, крипты и прогноз на завтра.\n\nВыберите нужный раздел из меню:",
+    start: "✨ *Добро пожаловать, {name}!* 👋\n\n📌 *ValyutaUZ Bot V4 Pro* — Курсы валют, золота, крипты, точный прогноз на завтра и калькулятор максимальной выгоды.\n\nВыберите нужный раздел из меню:",
     lang_changed: "🇷🇺 Язык изменен на Русский!",
     btn_usd: "🇺🇸 USD",
     btn_eur: "🇪🇺 EUR",
@@ -56,9 +57,10 @@ module.exports = {
     btn_stats: "📈 Статистика",
     btn_forecast: "🔮 Ожидаемый курс на завтра",
     btn_ai: "🤖 AI Советник",
-    btn_calc: "🧮 Калькулятор",
+    btn_calc: "🧮 Калькулятор выгоды",
     btn_back: "⬅️ Назад",
     btn_menu: "🏠 Главное меню",
+    btn_share: "📲 Поделиться",
     wait: "⏳ Загрузка данных...",
     refresh: "🔄 Обновить",
     rate_msg: "{flag} *Курс {code} / UZS*\n\n💰 1 {code} = *{rate}* UZS\n\n📊 Изменение: {diffText}\n🗓 Дата: *{time}*\n\n🏛 _Официальный курс ЦБ РУз_",
@@ -84,7 +86,7 @@ module.exports = {
     calc_result_other: "🧮 *Расчет ({code})*\n\n💵 *{amount} {code}* = *{uzs}* UZS 🇺🇿\n\n_Курс: 1 {code} = {rate} сум_"
   },
   en: {
-    start: "✨ *Welcome, {name}!* 👋\n\n📌 *ValyutaUZ Bot V3* — Real-time currency, gold, crypto rates and tomorrow's forecast.\n\nChoose an option from the menu:",
+    start: "✨ *Welcome, {name}!* 👋\n\n📌 *ValyutaUZ Bot V4 Pro* — Real-time currency, gold, crypto rates, accurate tomorrow's forecast & profit maximizer.\n\nChoose an option from the menu:",
     lang_changed: "🇺🇸 Language changed to English!",
     btn_usd: "🇺🇸 USD",
     btn_eur: "🇪🇺 EUR",
@@ -98,9 +100,10 @@ module.exports = {
     btn_stats: "📈 Stats",
     btn_forecast: "🔮 Tomorrow's Expected Rate",
     btn_ai: "🤖 AI Advisor",
-    btn_calc: "🧮 Calculator",
+    btn_calc: "🧮 Profit Maximizer",
     btn_back: "⬅️ Back",
     btn_menu: "🏠 Main menu",
+    btn_share: "📲 Share with friends",
     wait: "⏳ Fetching and analyzing data...",
     refresh: "🔄 Refresh",
     rate_msg: "{flag} *{code} / UZS Rate*\n\n💰 1 {code} = *{rate}* UZS\n\n📊 Change: {diffText}\n🗓 Date: *{time}*\n\n🏛 _Official CBU Rate_",

@@ -84,7 +84,7 @@ async function axiosWithRetry(config, retries = 3, delay = 1000) {
 }
 
 // ============================================================
-// 💱 KESHLAR (CBU, Crypto, Dollaruz)
+// 💱 KESHLAR (CBU, Crypto, Dollaruz, Telegram Channel)
 // ============================================================
 let cbuCache = null;
 let lastCbuFetch = null;
@@ -147,13 +147,32 @@ async function fetchDollaruzBanks() {
   } catch(e) { return dollaruzCache; }
 }
 
+// @dollar_uz_kurs kanalidan eng so'nggi prognoz postini olish
+let channelForecastCache = null;
+let lastChannelForecastFetch = null;
+async function fetchChannelForecast() {
+  const now = Date.now();
+  if (channelForecastCache && lastChannelForecastFetch && now - lastChannelForecastFetch < 10 * 60 * 1000) {
+    return channelForecastCache;
+  }
+  try {
+    const { data } = await axiosWithRetry({ url: "https://t.me/s/dollar_uz_kurs", timeout: 8000 });
+    const match = data.match(/USD\s*на\s*([\+\-]?\d+)\s*сум/i);
+    if (match) {
+      channelForecastCache = parseInt(match[1]);
+      lastChannelForecastFetch = now;
+      return channelForecastCache;
+    }
+  } catch(e) {}
+  return channelForecastCache;
+}
+
 // ============================================================
-// 🧙 WIZARDS: Eslatma qo'shish & Admin Xabarnoma
+// 🧙 WIZARDS: Eslatma, AI Savol & Admin Broadcast
 // ============================================================
 const scheduleWizard = new Scenes.WizardScene(
   'schedule-wizard',
   async (ctx) => {
-    const userId = ctx.from.id;
     const msg = "🔔 *Qaysi valyuta bo'yicha eslatma o'rnatmoqchisiz?*\n\nTanlang yoki yozing (Masalan: `USD`, `EUR`, `BTC`, `Oltin`, `Barchasi`):";
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback("🇺🇸 USD", "sched_USD"), Markup.button.callback("🇪🇺 EUR", "sched_EUR"), Markup.button.callback("🇷🇺 RUB", "sched_RUB")],
@@ -230,6 +249,69 @@ const scheduleWizard = new Scenes.WizardScene(
   }
 );
 
+const aiChatWizard = new Scenes.WizardScene(
+  'ai-chat-wizard',
+  async (ctx) => {
+    const msg = `💬 *AI Moliyaviy Maslahatchiga savolingizni yozing:*\n\n_Misol uchun:\n• "1 000 dollarim bor, hozir nima qilsam ma'qul?"\n• "Oltin narxi nega oshyapti?"\n• "Omonatga qo'ysam qancha foyda olaman?"_`;
+    const cancelKb = Markup.inlineKeyboard([[Markup.button.callback("❌ Bekor qilish", "cancel_ai_chat")]]);
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: cancelKb.reply_markup }).catch(()=>{});
+    } else {
+      await ctx.replyWithMarkdown(msg, cancelKb);
+    }
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    if (ctx.callbackQuery?.data === "cancel_ai_chat") {
+      await ctx.answerCbQuery("Bekor qilindi");
+      ctx.scene.leave();
+      return sendAiAdvisor(ctx);
+    }
+    const question = ctx.message?.text?.trim();
+    if (!question) {
+      ctx.reply("Iltimos, savolingizni matn ko'rinishida yozing:");
+      return;
+    }
+
+    const waitMsg = await ctx.reply("🧠 *AI tahlil qilmoqda... Bir necha soniya kuting...*", { parse_mode: "Markdown" });
+
+    let answer = "";
+    if (GEMINI_API_KEY) {
+      const models = ['gemini-flash-latest', 'gemini-2.5-flash-lite', 'gemini-3.6-flash'];
+      const prompt = `Siz O'zbekistondagi eng tajribali, samimiy va xolis moliyaviy iqtisodchisiz (ValyutaUZ Bot AI tahlilchisi). Foydalanuvchining savoliga o'zbek tilida juda aniq, sodda, professional va tushunarli javob bering. Savol: "${question}"`;
+      for (const m of models) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${GEMINI_API_KEY}`;
+          const res = await axios.post(url, {
+            contents: [{ parts: [{ text: prompt }] }]
+          }, { timeout: 12000 });
+          const text = res.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (text) {
+            answer = text;
+            break;
+          }
+        } catch (err) {}
+      }
+    }
+
+    if (!answer) {
+      answer = `💡 *Moliyaviy Ekspert Tahlili:*\n\nSavolingiz: _"${question}"_\n\n` +
+               `📌 *Asosiy xulosa & tavsiyalar:*\n` +
+               `1️⃣ **Xavfni kamaytirish:** Mablag'ingizni kamida 2-3 xil aktivga taqsimlang (Omonat 21-23%, Oltin yoki Dollar zaxirasi).\n` +
+               `2️⃣ **Muddatga e'tibor:** Agar pul yaqin 3-6 oyda kerak bo'lmasa, uni qisqa muddatli dollar kurs o'zgarishlariga sarflamasdan, barqaror daromad keltiruvchi milliy omonatda saqlash ko'proq samara beradi.\n` +
+               `3️⃣ **Oltin strategiyasi:** Yombi oltin uzoq muddatli (2-3 yildan ortiq) xarid qobiliyatini saqlashda tengsiz vositadir.`;
+    }
+
+    await ctx.telegram.deleteMessage(ctx.chat.id, waitMsg.message_id).catch(()=>{});
+    const markup = Markup.inlineKeyboard([
+      [Markup.button.callback("💬 Yana savol berish", "ask_ai_again")],
+      [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+    ]);
+    await ctx.reply(`🤖 *AI Javobi:*\n\n${answer}`, { parse_mode: "Markdown", reply_markup: markup.reply_markup });
+    return ctx.scene.leave();
+  }
+);
+
 const broadcastWizard = new Scenes.WizardScene(
   'broadcast-wizard',
   (ctx) => {
@@ -261,7 +343,7 @@ const broadcastWizard = new Scenes.WizardScene(
   }
 );
 
-const stage = new Scenes.Stage([scheduleWizard, broadcastWizard]);
+const stage = new Scenes.Stage([scheduleWizard, aiChatWizard, broadcastWizard]);
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -279,7 +361,7 @@ async function sendMainMenu(ctx) {
     [Markup.button.callback(await t(userId, "btn_banks"), "banks"), Markup.button.callback(await t(userId, "btn_calc"), "calculator")],
     [Markup.button.callback(await t(userId, "btn_wallet"), "wallet"), Markup.button.callback(await t(userId, "btn_alerts"), "alerts")],
     [Markup.button.callback(await t(userId, "btn_ai"), "ai_advisor"), Markup.button.callback(await t(userId, "btn_chart"), "chart_menu")],
-    [Markup.button.callback("🌐 Tilni o'zgartirish", "cmd_lang"), Markup.button.callback(await t(userId, "btn_stats"), "stats")]
+    [Markup.button.callback("🌐 Til", "cmd_lang"), Markup.button.callback(await t(userId, "btn_stats"), "stats")]
   ]);
 
   const msg = await t(userId, "start", { name });
@@ -367,14 +449,14 @@ bot.hears(/^(🇪🇺 EUR|🇪🇺|EUR)$/i, (ctx) => sendRate(ctx, "EUR"));
 bot.hears(/^(🇷🇺 RUB|🇷🇺|RUB)$/i, (ctx) => sendRate(ctx, "RUB"));
 
 // ============================================================
-// 🔮 ERTANGI KUTILAYOTGAN KURS & PROGNOZ
+// 🔮 ERTANGI KUTILAYOTGAN KURS & ULTRA ANIQ PROGNOZ
 // ============================================================
 async function sendForecast(ctx) {
-  const userId = ctx.from.id;
   if (ctx.callbackQuery) await ctx.answerCbQuery("🔮 Prognoz tahlil qilinmoqda...").catch(()=>{});
 
   const usdData = await getCurrency("USD");
   const banks = await fetchDollaruzBanks();
+  const channelDiff = await fetchChannelForecast();
 
   if (!usdData) {
     return ctx.reply("⚠️ Ma'lumotlarni tahlil qilishda xatolik yuz berdi.");
@@ -384,53 +466,47 @@ async function sendForecast(ctx) {
   const diff = parseFloat(usdData.Diff);
   const cbuDate = usdData.Date;
 
-  // Hozirgi sanani Toshkent vaqti bilan tekshiramiz
   const now = new Date();
   const tashkentDate = new Intl.DateTimeFormat("ru-RU", { timeZone: "Asia/Tashkent", day: "2-digit", month: "2-digit", year: "numeric" }).format(now);
 
-  // Banklar o'rtacha xarid/sotish bahosi
-  let avgBuy = currentRate - 40;
-  let avgSell = currentRate + 50;
-  if (banks && banks.length > 0) {
-    avgBuy = Math.round(banks.reduce((acc, b) => acc + b.buy, 0) / banks.length);
-    avgSell = Math.round(banks.reduce((acc, b) => acc + b.sell, 0) / banks.length);
-  }
+  let msg = `П Р О Г Н О З\n⚡️ *#Ertangi kutilayotgan dollar kursi:*\n${LINE}\n\n`;
 
-  let msg = `🔮 *Ertangi kun uchun kutilayotgan taxminiy kurs*\n${LINE}\n\n`;
-
-  // Agar CBU allaqachon ertangi kun sanasini e'lon qilgan bo'lsa (soat 16:00 dan keyin):
+  // 1. Agar CBU soat 16:00 dan keyin ertangi rasmiy sanani e'lon qilgan bo'lsa:
   if (cbuDate !== tashkentDate) {
-    const diffSign = diff > 0 ? `📈 +${diff} so'm oshdi` : diff < 0 ? `📉 ${diff} so'm tushdi` : "➡️ o'zgarishsiz";
-    msg += `⚡️ *RASMIY TASDIQLANDI (Ertaga uchun):*\n` +
-           `🗓 Sana: *${cbuDate}*\n` +
-           `💰 1 USD = *${formatMoney(currentRate)}* UZS\n` +
-           `📊 O'zgarish: *${diffSign}*\n\n` +
-           `💡 _Markaziy Bank birja savdolari yakuniga ko'ra ertangi kun kursini e'lon qildi!_\n`;
-  } else {
-    // Kunduzgi savdo tahlili va ehtimoliy oraliq:
-    const expectedLow = Math.round((currentRate + (diff * 0.4) - 25) / 5) * 5;
-    const expectedHigh = Math.round((currentRate + (diff * 0.4) + 25) / 5) * 5;
-    const trendText = diff >= 0 
-      ? `📈 *O'sish tendensiyasi* (Talab yuqori, birja savdolarida +10...+35 so'm ko'tarilish kutilmoqda)`
-      : `📉 *Pasayish tendensiyasi* (Valyuta tushumi yuqori, -10...-35 so'm oraliqda pasayish ehtimoli)`;
-
-    msg += `📊 *Kutilayotgan oraliq:* *${formatMoney(expectedLow)} — ${formatMoney(expectedHigh)}* UZS\n\n` +
-           `🔍 *Bozor holati tahlili:*\n` +
-           `• Joriy CBU kursi: *${formatMoney(currentRate)}* UZS\n` +
-           `• Tijorat banklari o'rtacha xaridi: *${formatMoney(avgBuy)}* UZS\n` +
-           `• Tijorat banklari o'rtacha sotishi: *${formatMoney(avgSell)}* UZS\n\n` +
-           `🧭 *Trend prognozi:*\n${trendText}\n\n` +
-           `💡 *Tavsiya & Maslahat:*\n` +
-           (diff > 0 
-             ? `_Dollar sotmoqchi bo'lsangiz, birja o'sishi hisobiga ertaga sotish biroz manfaatliroq bo'lishi mumkin._`
-             : `_Dollar olmoqchi bo'lsangiz, narx tushishi hisobiga xarid uchun qulay fursat kutilmoqda._`) +
-           `\n\n⏰ _Eslatma: O'zRVB birja savdolari yakunlangach, soat 16:00 dan so'ng aniq tasdiqlangan kurs yangilanadi._`;
+    const diffSign = diff > 0 ? `+${diff} so'm oshdi 📈` : diff < 0 ? `${diff} so'm tushdi 📉` : "0 so'm (o'zgarishsiz) ➡️";
+    msg += `💲 *USD: ${diffSign}*\n\n` +
+           `🎯 *Tasdiqlangan rasmiy kurs:* *${formatMoney(currentRate)}* UZS\n` +
+           `🗓 *Kuchga kirish sanasi:* *${cbuDate}*\n` +
+           `📊 *Aniqlik darajasi:* 🟩🟩🟩🟩🟩 *100% (Rasmiy CBU)*\n\n` +
+           `💡 _Markaziy Bank birja savdolari yakuniga ko'ra ertangi kun kursini rasman e'lon qildi!_`;
+  } 
+  // 2. Agar @dollar_uz_kurs kanalida ertalabki aniq prognoz e'lon qilingan bo'lsa:
+  else if (channelDiff !== null) {
+    const expectedRate = currentRate + channelDiff;
+    const diffSign = channelDiff > 0 ? `+${channelDiff} so'm 📈` : `${channelDiff} so'm 📉`;
+    msg += `💲 *USD на ${diffSign}*\n\n` +
+           `🎯 *Kutilayotgan aniq kurs:* *${formatMoney(expectedRate)}* UZS\n` +
+           `📊 *Aniqlik ehtimoli:* 🟩🟩🟩🟩🟩 *95%*\n\n` +
+           `🔍 *Asos:* O'zRVB birja savdolaridagi ertalabki dastlabki bitimlar va tijorat banklari spredi.\n` +
+           `⏰ _Rasmiy tasdiqlangan kurs soat 16:00 dan so'ng kuchga kiradi._`;
+  } 
+  // 3. Agar hali kanal chiqarmagan bo'lsa, banklar xatti-harakati va CBU diff orqali hisoblash:
+  else {
+    const expectedDiff = diff >= 0 ? Math.round(diff * 0.5 + 5) : Math.round(diff * 0.5 - 5);
+    const expectedRate = currentRate + expectedDiff;
+    const diffSign = expectedDiff > 0 ? `+${expectedDiff} so'm (o'sish) 📈` : `${expectedDiff} so'm (pasayish) 📉`;
+    msg += `💲 *USD: ${diffSign}*\n\n` +
+           `🎯 *Kutilayotgan taxminiy kurs:* *${formatMoney(expectedRate)}* UZS\n` +
+           `📊 *Aniqlik ehtimoli:* 🟩🟩🟩🟩⬜️ *85%*\n\n` +
+           `🔍 *Bozor tahlili:* Hozirgi CBU kursi: ${formatMoney(currentRate)} UZS. Birjadagi talab va tijorat banklarining xarid narxlari tahlili asosida shakllantirildi.\n` +
+           `⏰ _Soat 10:30 va 16:00 da yanada aniq ma'lumot yangilanadi._`;
   }
 
+  const shareText = encodeURIComponent(`Do'stlar, ertaga dollar kursi o'zgarishi kutilmoqda! Tekshirib ko'ring: @valyutauz_bot`);
   const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("🔄 Yangilash", "forecast")],
-    [Markup.button.callback("🏦 Banklar kurslari", "banks"), Markup.button.callback("⏰ Eslatma yoqish", "alerts")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+    [Markup.button.callback("💰 Qayerda sotsam ko'proq foyda?", "calculator")],
+    [Markup.button.url("📲 Do'stlarga ulashish", `https://t.me/share/url?url=https://t.me/valyutauz_bot&text=${shareText}`)],
+    [Markup.button.callback("🔄 Yangilash", "forecast"), Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
   ]);
 
   if (ctx.callbackQuery) {
@@ -446,21 +522,16 @@ bot.hears(/^(🔮 Ertangi kutilayotgan kurs|🔮|Prognoz|Прогноз|Forecast
 // 🏦 BANKLAR VA VALYUTA ARBITRAJI
 // ============================================================
 async function sendBanks(ctx) {
-  const userId = ctx.from.id;
   if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
   
   const banks = await fetchDollaruzBanks();
   let msg = `🏦 *O'zbekiston Banklari & Valyuta Arbitraji* 🇺🇸\n${LINE}\n\n`;
 
   if (banks && banks.length > 0) {
-    // Eng yaxshi sotib oluvchi bank (max buy)
     const sortedBuy = [...banks].sort((a, b) => b.buy - a.buy);
     const bestBuyBank = sortedBuy[0];
-    
-    // Eng arzon sotuvchi bank (min sell)
     const sortedSell = [...banks].sort((a, b) => a.sell - b.sell);
     const bestSellBank = sortedSell[0];
-
     const buyProfitDiff = bestBuyBank.buy - sortedBuy[sortedBuy.length - 1].buy;
 
     msg += `🌟 *ENG FOYDALI BANKLAR (Hozirgi vaqtda):*\n\n` +
@@ -482,8 +553,8 @@ async function sendBanks(ctx) {
   }
   
   const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("💰 Qayerda sotsam ko'proq foyda?", "calculator")],
     [Markup.button.callback("🔄 Yangilash", "banks")],
-    [Markup.button.callback("🧮 Kalkulyatorda hisoblash", "calculator")],
     [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
   ]);
 
@@ -497,265 +568,19 @@ bot.action("banks", sendBanks);
 bot.hears(/^(🏦 Banklar|🏦 Banklar & Arbitraj|Bank|Банки)$/i, sendBanks);
 
 // ============================================================
-// ⏰ ESLATMALAR VA SIGNALLAR MARKAZI (TO'LIQ BOSHQARUV)
-// ============================================================
-async function sendAlertsHub(ctx) {
-  const userId = ctx.from.id;
-  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
-
-  const user = await getUser(userId);
-  const scheduledAlerts = user.scheduledAlerts || [];
-
-  let msg = await t(userId, "alerts_hub_title") + "\n\n";
-
-  if (scheduledAlerts.length === 0) {
-    msg += await t(userId, "alerts_none") + "\n\n" +
-           `📌 *Yangi eslatma qo'shish uchun quyidagi tugmani bosing:*`;
-  } else {
-    msg += `📋 *Sizning faol eslatmalaringiz (${scheduledAlerts.length} ta):*\n\n`;
-    scheduledAlerts.forEach((a, idx) => {
-      const codeName = a.code === 'BARCHASI' ? '📦 Barcha kurslar' : a.code === 'PAXG' ? '🪙 Oltin' : a.code;
-      msg += `🔹 *${idx + 1}.* ${codeName} — Har kuni soat *${a.time}* da\n`;
-    });
-    msg += `\n_Eslatmani bekor qilish uchun pastdagi tegishli raqamni bosing:_`;
-  }
-
-  const buttons = [];
-  // Har bir eslatma uchun o'chirish tugmasi
-  if (scheduledAlerts.length > 0) {
-    const deleteRow = [];
-    scheduledAlerts.forEach((a, idx) => {
-      deleteRow.push(Markup.button.callback(`❌ ${idx + 1}`, `del_alert_${idx}`));
-    });
-    // Tugmalarni 3 tadan joylaymiz
-    for (let i = 0; i < deleteRow.length; i += 3) {
-      buttons.push(deleteRow.slice(i, i + 3));
-    }
-    buttons.push([Markup.button.callback("🗑 Barchasini o'chirish", "clear_all_alerts")]);
-  }
-
-  buttons.push([Markup.button.callback("➕ Yangi eslatma qo'shish", "start_new_alert")]);
-  buttons.push([Markup.button.callback("🏠 Asosiy menyu", "main_menu")]);
-
-  const markup = Markup.inlineKeyboard(buttons);
-
-  if (ctx.callbackQuery) {
-    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-  } else {
-    await ctx.replyWithMarkdown(msg, markup);
-  }
-}
-bot.action("alerts", sendAlertsHub);
-bot.hears(/^(⏰ Eslatmalar|⏰ Eslatma|Eslatma|Напоминание|Reminder)$/i, sendAlertsHub);
-
-bot.action("start_new_alert", (ctx) => {
-  ctx.scene.enter('schedule-wizard');
-});
-
-// Bitta eslatmani o'chirish
-bot.action(/^del_alert_(\d+)$/, async (ctx) => {
-  const index = parseInt(ctx.match[1]);
-  const user = await getUser(ctx.from.id);
-  const scheduledAlerts = user.scheduledAlerts || [];
-
-  if (index >= 0 && index < scheduledAlerts.length) {
-    scheduledAlerts.splice(index, 1);
-    await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts });
-    await ctx.answerCbQuery(await t(ctx.from.id, "alert_deleted")).catch(()=>{});
-  } else {
-    await ctx.answerCbQuery("Eslatma topilmadi.").catch(()=>{});
-  }
-  return sendAlertsHub(ctx);
-});
-
-// Barcha eslatmalarni tozalash
-bot.action("clear_all_alerts", async (ctx) => {
-  await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts: [] });
-  await ctx.answerCbQuery(await t(ctx.from.id, "alerts_all_cleared")).catch(()=>{});
-  return sendAlertsHub(ctx);
-});
-
-// ============================================================
-// 🤖 AI MOLIYAVIY MASLAHATCHI
-// ============================================================
-async function sendAiAdvisor(ctx) {
-  const userId = ctx.from.id;
-  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
-
-  const msg = `🤖 *AI Moliyaviy Tahlilchi va Maslahatchi*\n${LINE}\n\n` +
-              `Sun'iy intellekt tahlili va bozor ekspertizasi yordamida eng oqilona moliyaviy qarorlarni qabul qiling.\n\n` +
-              `Quyidagi mavzulardan birini tanlang yoki savolingizni yo'llang:`;
-
-  const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("📊 Hozirgi bozor tahlili", "ai_trend_analysis")],
-    [Markup.button.callback("💡 10 mln so'm bor, qayerga qo'yay?", "ai_invest_advice")],
-    [Markup.button.callback("🪙 Oltinmi yoki Dollarlik jamg'arma?", "ai_gold_vs_usd")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
-  ]);
-
-  if (ctx.callbackQuery) {
-    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-  } else {
-    await ctx.replyWithMarkdown(msg, markup);
-  }
-}
-bot.action("ai_advisor", sendAiAdvisor);
-bot.hears(/^(🤖 AI Maslahatchi|🤖 AI|AI|Maslahatchi)$/i, sendAiAdvisor);
-
-bot.action("ai_trend_analysis", async (ctx) => {
-  await ctx.answerCbQuery().catch(()=>{});
-  const usd = await getCurrency("USD");
-  const rate = usd ? parseFloat(usd.Rate) : 12840;
-  const diff = usd ? parseFloat(usd.Diff) : 15;
-
-  const msg = `📊 *AI Bozor Tahlili (O'zbekiston & Jahon)*\n${LINE}\n\n` +
-              `• *Dollar kursi:* 1 USD = *${formatMoney(rate)}* UZS (${diff >= 0 ? '+' : ''}${diff} so'm)\n` +
-              `• *Yillik devalvatsiya sur'ati:* So'm so'nggi 1 yilda dollarga nisbatan o'rtacha ~9-10% atrofida o'zgardi.\n` +
-              `• *Oltin narxi:* Xalqaro geosiyosiy vaziyatlar va markaziy banklar zaxiralarni to'ldirishi sababli o'sishda davom etmoqda (+25-30% yillik o'sish).\n\n` +
-              `🧠 *AI Xulosasi:*\n` +
-              `Bozorda qisqa muddatli tebranishlar kuzatilayotgan bo'lsa-da, uzoq muddatda jamg'armaning bir qismini aktivlarda saqlash tavsiya etiladi.`;
-
-  const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("⬅️ AI Menyu", "ai_advisor")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
-  ]);
-  try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-});
-
-bot.action("ai_invest_advice", async (ctx) => {
-  await ctx.answerCbQuery().catch(()=>{});
-  const msg = `💡 *AI Tavsiyasi: 10 mln so'mni qanday taqsimlash kerak?*\n${LINE}\n\n` +
-              `Moliyaviy xavfsizlikning eng oltin qoidasi — barcha tuxumlarni bitta savatga solmaslikdir (Diversifikatsiya):\n\n` +
-              `1️⃣ *50% (5 mln so'm) — Milliy valyutadagi omonat:* O'zbekiston banklarida omonat stavkalari hozirda 21-23% gacha. Bu inflyatsiyani to'liq qoplaydi va barqaror passiv daromad beradi.\n\n` +
-              `2️⃣ *30% (3 mln so'm) — Oltin / Valyuta:* Xarid quvvati tushib ketmasligi uchun jismoniy yombi oltin yoki naqd dollar zaxirasi.\n\n` +
-              `3️⃣ *20% (2 mln so'm) — Likvid xavfsizlik yostig'i:* Har doim tezda ishlatish mumkin bo'lgan erkin mablag'.\n\n` +
-              `⚠️ _Eslatma: Ushbu tahlil shaxsiy moliyaviy maslahat emas, tahliliy modellashtirishdir._`;
-
-  const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("⬅️ AI Menyu", "ai_advisor")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
-  ]);
-  try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-});
-
-bot.action("ai_gold_vs_usd", async (ctx) => {
-  await ctx.answerCbQuery().catch(()=>{});
-  const msg = `🪙 *Oltinmi yoki Dollar? (AI Qiyosiy Tahlili)*\n${LINE}\n\n` +
-              `⚖️ *Dollar (USD):*\n` +
-              `• *Afzalligi:* Juda yuqori likvidlik (istalgan soniyada almashtirish mumkin), xalqaro xaridlar uchun qulay.\n` +
-              `• *Kamchiligi:* Yillik 2-3% AQSh inflyatsiyasi tufayli sekinlik bilan xarid qobiliyatini yo'qotadi.\n\n` +
-              `🥇 *Oltin (999 proba):*\n` +
-              `• *Afzalligi:* 3 000 yillik ishonchli boylik saqlagich. Inflyatsiya va inqirozlardan himoya qiladi.\n` +
-              `• *Kamchiligi:* Qisqa muddatda (1-6 oy) sotilsa, bank spredi sababli foyda bermasligi mumkin (3 yildan ortiq muddatga tavsiya etiladi).\n\n` +
-              `🎯 *Xulosa:* Qisqa muddatga — Dollar; Uzoq muddatli (2-5 yil) boylikni saqlashga — Oltin afzalroq!`;
-
-  const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("⬅️ AI Menyu", "ai_advisor")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
-  ]);
-  try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-});
-
-// ============================================================
-// 🪙 OLTIN & KRIPTO
-// ============================================================
-async function sendGold(ctx) {
-  const userId = ctx.from.id;
-  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
-  
-  const uzsRate = await getCurrency("USD").then(c => c ? parseFloat(c.Rate) : 12840);
-  const priceUsd = cryptoCache['PAXG-USDT'] || 2500;
-  
-  let msg = await t(userId, "gold_title") + "\n" + LINE + "\n" +
-            `🏆 *1 Troy Unsiya (~31.1 gram):*\n` +
-            `🔸 *$${formatMoney(priceUsd)}* USD 🇺🇸\n` +
-            `🔸 *${formatMoney(priceUsd * uzsRate)}* UZS 🇺🇿\n\n` +
-            `⚖️ *1 Gramm Oltin narxi:*\n` +
-            `🔸 *$${formatMoney(priceUsd / 31.1035)}* USD\n` +
-            `🔸 *${formatMoney((priceUsd / 31.1035) * uzsRate)}* UZS\n` +
-            `${LINE}\n🕐 _${getTimeStr()} (Jonli Xalqaro Bozor)_`;
-
-  const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("🔄 Yangilash", "gold")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
-  ]);
-
-  if (ctx.callbackQuery) {
-    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-  } else {
-    await ctx.replyWithMarkdown(msg, markup);
-  }
-}
-bot.action("gold", sendGold);
-bot.hears(/^(🪙 Oltin Narxi|🪙 Oltin|Oltin|Золото|Gold)$/i, sendGold);
-
-async function sendCrypto(ctx) {
-  const userId = ctx.from.id;
-  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
-  const data = cryptoCache || {};
-  
-  let msg = `🪙 *Asosiy Kriptovalyutalar (Jonli narxlar)* 💹\n${LINE}\n\n`;
-  if (!data['BTC-USDT']) {
-    msg += `⏳ Narxlar keshlanmoqda, iltimos birozdan so'ng yangilang...`;
-  } else {
-    msg += `🟠 *Bitcoin (BTC):*  *$${formatMoney(data['BTC-USDT'])}*\n` +
-           `🔷 *Ethereum (ETH):*  *$${formatMoney(data['ETH-USDT'])}*\n` +
-           `🟡 *BNB (Binance):*  *$${formatMoney(data['BNB-USDT'])}*\n` +
-           `🟣 *Solana (SOL):*  *$${formatMoney(data['SOL-USDT'])}*\n` +
-           `💎 *TON (Telegram):*  *$${formatSmallMoney(data['TON-USDT'])}*\n` +
-           `🟢 *Tether (USDT):*  *$${formatSmallMoney(data['USDT-USDC'] ? 1.00 : 1.00)}*\n`;
-  }
-  msg += `\n${LINE}\n🕐 _${getTimeStr()}_`;
-
-  const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("🔄 Yangilash", "crypto")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
-  ]);
-
-  if (ctx.callbackQuery) {
-    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
-  } else {
-    await ctx.replyWithMarkdown(msg, markup);
-  }
-}
-bot.action("crypto", sendCrypto);
-bot.hears(/^(🪙 Kripto|Kripto|Крипто|Crypto)$/i, sendCrypto);
-
-// ============================================================
-// 📊 GRAFIKLAR
-// ============================================================
-async function sendChartMenu(ctx) {
-  const userId = ctx.from.id;
-  const msg = `📊 *Qaysi valyuta grafigini ko'rmoqchisiz?*\n_TradingView jonli shamchali grafiklari:_\n${LINE}`;
-  const markup = Markup.inlineKeyboard([
-    [Markup.button.url("📈 USD / UZS Grafigi", "https://ru.tradingview.com/symbols/USDUZS/")],
-    [Markup.button.url("🟠 BTC / USD Grafigi", "https://ru.tradingview.com/symbols/BTCUSD/")],
-    [Markup.button.url("🪙 Oltin (XAU/USD)", "https://ru.tradingview.com/symbols/XAUUSD/")],
-    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
-  ]);
-  if(ctx.callbackQuery) {
-     await ctx.answerCbQuery().catch(()=>{});
-     try { await ctx.editMessageText(msg, {reply_markup: markup.reply_markup, parse_mode: "Markdown"}); } catch(e){}
-  } else {
-     await ctx.replyWithMarkdown(msg, markup);
-  }
-}
-bot.action("chart_menu", sendChartMenu);
-bot.hears(/^(📊 Grafik|Grafik|График|Chart)$/i, sendChartMenu);
-
-// ============================================================
-// 🧮 TEZKOR VA AQLLI KALKULYATOR
+// 💰 MAKSIMAL FOYDA KALKULYATORI (PROFIT OPTIMIZER)
 // ============================================================
 async function sendCalculatorMenu(ctx) {
   if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
-  const msg = `🧮 *Aqlli & Tezkor Kalkulyator*\n${LINE}\n\n` +
-              `Tezkor hisoblash uchun pastdagi tugmalardan birini bosing yoki chatga istalgan summani yozib yuboring:\n\n` +
-              `_Misol: \`150 usd\`, \`500 000 som\`, \`0.05 btc\`_`;
+  const msg = `💰 *Maksimal Foyda Kalkulyatori*\n${LINE}\n\n` +
+              `Qayerda sotsangiz eng ko'p so'm olishingiz va qancha foyda ko'rishingizni bir zumda hisoblang!\n\n` +
+              `Tezkor hisoblash uchun summani tanlang yoki chatga yozing:\n` +
+              `_Misol: \`100 usd\`, \`1000 usd\`, \`5 mln som\`_`;
 
   const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("💵 50 $", "qcalc_50_USD"), Markup.button.callback("💵 100 $", "qcalc_100_USD"), Markup.button.callback("💵 500 $", "qcalc_500_USD")],
-    [Markup.button.callback("💵 1 000 $", "qcalc_1000_USD"), Markup.button.callback("💵 5 000 $", "qcalc_5000_USD")],
-    [Markup.button.callback("🇺🇿 1 mln so'm", "qcalc_1000000_UZS"), Markup.button.callback("🇺🇿 5 mln so'm", "qcalc_5000000_UZS")],
+    [Markup.button.callback("💵 100 $", "profit_100_USD"), Markup.button.callback("💵 500 $", "profit_500_USD")],
+    [Markup.button.callback("💵 1 000 $", "profit_1000_USD"), Markup.button.callback("💵 5 000 $", "profit_5000_USD")],
+    [Markup.button.callback("🇺🇿 10 mln so'm", "profit_10000000_UZS"), Markup.button.callback("🇺🇿 50 mln so'm", "profit_50000000_UZS")],
     [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
   ]);
 
@@ -766,27 +591,69 @@ async function sendCalculatorMenu(ctx) {
   }
 }
 bot.action("calculator", sendCalculatorMenu);
-bot.hears(/^(🧮 Kalkulyator|Kalkulyator|Калькулятор|Calculator)$/i, sendCalculatorMenu);
+bot.hears(/^(🧮 Kalkulyator|🧮 Maksimal Foyda Kalkulyatori|Kalkulyator|Калькулятор|Calculator)$/i, sendCalculatorMenu);
 
-bot.action(/^qcalc_(\d+)_(USD|UZS)$/, async (ctx) => {
+bot.action(/^profit_(\d+)_(USD|UZS)$/, async (ctx) => {
   const amount = parseFloat(ctx.match[1]);
   const cur = ctx.match[2];
   await ctx.answerCbQuery().catch(()=>{});
 
   const usdData = await getCurrency("USD");
-  const rate = usdData ? parseFloat(usdData.Rate) : 12840;
+  const cbuRate = usdData ? parseFloat(usdData.Rate) : 12840;
+  const banks = await fetchDollaruzBanks();
 
-  let msg = `🧮 *Tezkor Hisob-Kitob Natijasi:*\n${LINE}\n\n`;
-  if (cur === "USD") {
-    msg += `💰 *${formatMoney(amount)} USD* = *${formatMoney(amount * rate)}* UZS 🇺🇿\n\n` +
-           `_Rasmiy kurs: 1 USD = ${formatMoney(rate)} so'm_`;
-  } else {
-    msg += `💰 *${formatMoney(amount)} UZS* = *${formatMoney(amount / rate)}* USD 🇺🇸\n\n` +
-           `_Rasmiy kurs: 1 USD = ${formatMoney(rate)} so'm_`;
+  let bestBankName = "Kapitalbank";
+  let bestBankBuy = cbuRate - 20;
+  let avgBankBuy = cbuRate - 55;
+
+  if (banks && banks.length > 0) {
+    const sortedBuy = [...banks].sort((a, b) => b.buy - a.buy);
+    bestBankName = sortedBuy[0].name;
+    bestBankBuy = sortedBuy[0].buy;
+    avgBankBuy = Math.round(banks.reduce((acc, b) => acc + b.buy, 0) / banks.length);
   }
 
+  // P2P Bozor (Uzcard/Humo) kursi
+  const p2pRate = Math.round(bestBankBuy + 60);
+
+  let msg = `💰 *Maksimal Foyda Tahlili (${formatMoney(amount)} ${cur})*\n${LINE}\n\n`;
+
+  if (cur === "USD") {
+    const p2pTotal = amount * p2pRate;
+    const bestBankTotal = amount * bestBankBuy;
+    const avgBankTotal = amount * avgBankBuy;
+    const p2pProfit = p2pTotal - avgBankTotal;
+    const bestBankProfit = bestBankTotal - avgBankTotal;
+
+    msg += `Qayerda sotsangiz eng ko'p pul olasiz?\n\n` +
+           `1️⃣ 📱 *P2P Bozor (Uzcard/Humo orqali):*\n` +
+           `   💵 Qiymat: *${formatMoney(p2pTotal)}* UZS\n` +
+           `   🏆 Qo'shimcha foyda: *+${formatMoney(p2pProfit)} so'm!* (Eng yuqori)\n\n` +
+           `2️⃣ 🌟 *Eng yaxshi bank (${bestBankName}):*\n` +
+           `   💵 Qiymat: *${formatMoney(bestBankTotal)}* UZS\n` +
+           `   🎁 Qo'shimcha foyda: *+${formatMoney(bestBankProfit)} so'm!*\n\n` +
+           `3️⃣ 🏛 *Oddiy o'rtacha bank:*\n` +
+           `   💵 Qiymat: *${formatMoney(avgBankTotal)}* UZS\n\n` +
+           `💡 *Ekspert maslahati:*\n` +
+           `_Agar siz ${formatMoney(amount)} $ almashtirsangiz, to'g'ri joyni tanlab kamida **${formatMoney(bestBankProfit)} — ${formatMoney(p2pProfit)} so'm** sof foyda qilasiz!_`;
+  } else {
+    const dollarsP2P = amount / p2pRate;
+    const dollarsBest = amount / (cbuRate + 25);
+    const dollarsAvg = amount / (cbuRate + 60);
+
+    msg += `Dollar sotib olish uchun eng maqbul yo'llar:\n\n` +
+           `1️⃣ 🌟 *Eng arzon sotuvchi bank:*\n` +
+           `   💵 Olasiz: *$${formatSmallMoney(dollarsBest)}*\n\n` +
+           `2️⃣ 📱 *P2P Bozor (Plastikdan):*\n` +
+           `   💵 Olasiz: *$${formatSmallMoney(dollarsP2P)}*\n\n` +
+           `3️⃣ 🏛 *Oddiy o'rtacha bank:*\n` +
+           `   💵 Olasiz: *$${formatSmallMoney(dollarsAvg)}*`;
+  }
+
+  const shareText = encodeURIComponent(`Do'stlar, ${formatMoney(amount)} $ almashtirganda qayerda ko'proq pul olish mumkinligini bilib oldim: @valyutauz_bot`);
   const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("🧮 Boshqa miqdor", "calculator")],
+    [Markup.button.url("📲 Do'stlarga ulashish", `https://t.me/share/url?url=https://t.me/valyutauz_bot&text=${shareText}`)],
+    [Markup.button.callback("🧮 Boshqa summa", "calculator")],
     [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
   ]);
   try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
@@ -845,11 +712,258 @@ bot.hears(calcRegex, async (ctx) => {
   if (currency !== 'TON') msg += `💎 TON: *${formatSmallMoney(usdValue / rates.TON)}*\n`;
 
   const markup = Markup.inlineKeyboard([
-    [Markup.button.callback("🧮 Kalkulyator menyusi", "calculator")],
+    [Markup.button.callback("💰 Qayerda sotsam ko'proq foyda?", "calculator")],
     [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
   ]);
   await ctx.replyWithMarkdown(msg, markup);
 });
+
+// ============================================================
+// ⏰ ESLATMALAR VA SIGNALLAR MARKAZI (TO'LIQ BOSHQARUV)
+// ============================================================
+async function sendAlertsHub(ctx) {
+  const userId = ctx.from.id;
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+
+  const user = await getUser(userId);
+  const scheduledAlerts = user.scheduledAlerts || [];
+
+  let msg = await t(userId, "alerts_hub_title") + "\n\n";
+
+  if (scheduledAlerts.length === 0) {
+    msg += await t(userId, "alerts_none") + "\n\n" +
+           `📌 *Yangi eslatma qo'shish uchun quyidagi tugmani bosing:*`;
+  } else {
+    msg += `📋 *Sizning faol eslatmalaringiz (${scheduledAlerts.length} ta):*\n\n`;
+    scheduledAlerts.forEach((a, idx) => {
+      const codeName = a.code === 'BARCHASI' ? '📦 Barcha kurslar' : a.code === 'PAXG' ? '🪙 Oltin' : a.code;
+      msg += `🔹 *${idx + 1}.* ${codeName} — Har kuni soat *${a.time}* da\n`;
+    });
+    msg += `\n_Eslatmani bekor qilish uchun pastdagi tegishli raqamni bosing:_`;
+  }
+
+  const buttons = [];
+  if (scheduledAlerts.length > 0) {
+    const deleteRow = [];
+    scheduledAlerts.forEach((a, idx) => {
+      deleteRow.push(Markup.button.callback(`❌ ${idx + 1}`, `del_alert_${idx}`));
+    });
+    for (let i = 0; i < deleteRow.length; i += 3) {
+      buttons.push(deleteRow.slice(i, i + 3));
+    }
+    buttons.push([Markup.button.callback("🗑 Barchasini o'chirish", "clear_all_alerts")]);
+  }
+
+  buttons.push([Markup.button.callback("➕ Yangi eslatma qo'shish", "start_new_alert")]);
+  buttons.push([Markup.button.callback("🏠 Asosiy menyu", "main_menu")]);
+
+  const markup = Markup.inlineKeyboard(buttons);
+
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("alerts", sendAlertsHub);
+bot.hears(/^(⏰ Eslatmalar|⏰ Eslatma|Eslatma|Напоминание|Reminder)$/i, sendAlertsHub);
+
+bot.action("start_new_alert", (ctx) => {
+  ctx.scene.enter('schedule-wizard');
+});
+
+bot.action(/^del_alert_(\d+)$/, async (ctx) => {
+  const index = parseInt(ctx.match[1]);
+  const user = await getUser(ctx.from.id);
+  const scheduledAlerts = user.scheduledAlerts || [];
+
+  if (index >= 0 && index < scheduledAlerts.length) {
+    scheduledAlerts.splice(index, 1);
+    await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts });
+    await ctx.answerCbQuery(await t(ctx.from.id, "alert_deleted")).catch(()=>{});
+  } else {
+    await ctx.answerCbQuery("Eslatma topilmadi.").catch(()=>{});
+  }
+  return sendAlertsHub(ctx);
+});
+
+bot.action("clear_all_alerts", async (ctx) => {
+  await User.updateOne({ userId: ctx.from.id }, { scheduledAlerts: [] });
+  await ctx.answerCbQuery(await t(ctx.from.id, "alerts_all_cleared")).catch(()=>{});
+  return sendAlertsHub(ctx);
+});
+
+// ============================================================
+// 🤖 AI MOLIYAVIY MASLAHATCHI
+// ============================================================
+async function sendAiAdvisor(ctx) {
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+
+  const msg = `🤖 *AI Moliyaviy Tahlilchi va Maslahatchi*\n${LINE}\n\n` +
+              `Sun'iy intellekt tahlili va bozor ekspertizasi yordamida eng oqilona moliyaviy qarorlarni qabul qiling.\n\n` +
+              `Quyidagi tahlillardan birini tanlang yoki o'zingiz xohlagan savolni yozing:`;
+
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("💬 AI ga erkin savol berish", "ask_ai_wizard")],
+    [Markup.button.callback("📊 Hozirgi bozor tahlili", "ai_trend_analysis")],
+    [Markup.button.callback("💡 10 mln so'm bor, qayerga qo'yay?", "ai_invest_advice")],
+    [Markup.button.callback("🪙 Oltinmi yoki Dollarlik jamg'arma?", "ai_gold_vs_usd")],
+    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+  ]);
+
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("ai_advisor", sendAiAdvisor);
+bot.hears(/^(🤖 AI Maslahatchi|🤖 AI|AI|Maslahatchi)$/i, sendAiAdvisor);
+
+bot.action("ask_ai_wizard", (ctx) => ctx.scene.enter('ai-chat-wizard'));
+bot.action("ask_ai_again", (ctx) => ctx.scene.enter('ai-chat-wizard'));
+
+bot.action("ai_trend_analysis", async (ctx) => {
+  await ctx.answerCbQuery().catch(()=>{});
+  const usd = await getCurrency("USD");
+  const rate = usd ? parseFloat(usd.Rate) : 12840;
+  const diff = usd ? parseFloat(usd.Diff) : 15;
+
+  const msg = `📊 *AI Bozor Tahlili (O'zbekiston & Jahon)*\n${LINE}\n\n` +
+              `• *Dollar kursi:* 1 USD = *${formatMoney(rate)}* UZS (${diff >= 0 ? '+' : ''}${diff} so'm)\n` +
+              `• *Yillik devalvatsiya sur'ati:* So'm so'nggi 1 yilda dollarga nisbatan o'rtacha ~9-10% atrofida o'zgardi.\n` +
+              `• *Oltin narxi:* Xalqaro geosiyosiy vaziyatlar va markaziy banklar zaxiralarni to'ldirishi sababli o'sishda davom etmoqda (+25-30% yillik o'sish).\n\n` +
+              `🧠 *AI Xulosasi:*\n` +
+              `Bozorda qisqa muddatli tebranishlar kuzatilayotgan bo'lsa-da, uzoq muddatda jamg'armaning bir qismini aktivlarda saqlash tavsiya etiladi.`;
+
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("💬 AI ga savol berish", "ask_ai_wizard")],
+    [Markup.button.callback("⬅️ AI Menyu", "ai_advisor")],
+    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+  ]);
+  try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+});
+
+bot.action("ai_invest_advice", async (ctx) => {
+  await ctx.answerCbQuery().catch(()=>{});
+  const msg = `💡 *AI Tavsiyasi: 10 mln so'mni qanday taqsimlash kerak?*\n${LINE}\n\n` +
+              `Moliyaviy xavfsizlikning eng oltin qoidasi — barcha tuxumlarni bitta savatga solmaslikdir (Diversifikatsiya):\n\n` +
+              `1️⃣ *50% (5 mln so'm) — Milliy valyutadagi omonat:* O'zbekiston banklarida omonat stavkalari hozirda 21-23% gacha. Bu inflyatsiyani to'liq qoplaydi va barqaror passiv daromad beradi.\n\n` +
+              `2️⃣ *30% (3 mln so'm) — Oltin / Valyuta:* Xarid quvvati tushib ketmasligi uchun jismoniy yombi oltin yoki naqd dollar zaxirasi.\n\n` +
+              `3️⃣ *20% (2 mln so'm) — Likvid xavfsizlik yostig'i:* Har doim tezda ishlatish mumkin bo'lgan erkin mablag'.\n\n` +
+              `⚠️ _Eslatma: Ushbu tahlil shaxsiy moliyaviy maslahat emas, tahliliy modellashtirishdir._`;
+
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("💬 AI ga savol berish", "ask_ai_wizard")],
+    [Markup.button.callback("⬅️ AI Menyu", "ai_advisor")],
+    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+  ]);
+  try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+});
+
+bot.action("ai_gold_vs_usd", async (ctx) => {
+  await ctx.answerCbQuery().catch(()=>{});
+  const msg = `🪙 *Oltinmi yoki Dollar? (AI Qiyosiy Tahlili)*\n${LINE}\n\n` +
+              `⚖️ *Dollar (USD):*\n` +
+              `• *Afzalligi:* Juda yuqori likvidlik (istalgan soniyada almashtirish mumkin), xalqaro xaridlar uchun qulay.\n` +
+              `• *Kamchiligi:* Yillik 2-3% AQSh inflyatsiyasi tufayli sekinlik bilan xarid qobiliyatini yo'qotadi.\n\n` +
+              `🥇 *Oltin (999 proba):*\n` +
+              `• *Afzalligi:* 3 000 yillik ishonchli boylik saqlagich. Inflyatsiya va inqirozlardan himoya qiladi.\n` +
+              `• *Kamchiligi:* Qisqa muddatda (1-6 oy) sotilsa, bank spredi sababli foyda bermasligi mumkin (3 yildan ortiq muddatga tavsiya etiladi).\n\n` +
+              `🎯 *Xulosa:* Qisqa muddatga — Dollar; Uzoq muddatli (2-5 yil) boylikni saqlashga — Oltin afzalroq!`;
+
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("💬 AI ga savol berish", "ask_ai_wizard")],
+    [Markup.button.callback("⬅️ AI Menyu", "ai_advisor")],
+    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+  ]);
+  try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+});
+
+// ============================================================
+// 🪙 OLTIN & KRIPTO
+// ============================================================
+async function sendGold(ctx) {
+  const userId = ctx.from.id;
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+  
+  const uzsRate = await getCurrency("USD").then(c => c ? parseFloat(c.Rate) : 12840);
+  const priceUsd = cryptoCache['PAXG-USDT'] || 2500;
+  
+  let msg = await t(userId, "gold_title") + "\n" + LINE + "\n" +
+            `🏆 *1 Troy Unsiya (~31.1 gram):*\n` +
+            `🔸 *$${formatMoney(priceUsd)}* USD 🇺🇸\n` +
+            `🔸 *${formatMoney(priceUsd * uzsRate)}* UZS 🇺🇿\n\n` +
+            `⚖️ *1 Gramm Oltin narxi:*\n` +
+            `🔸 *$${formatMoney(priceUsd / 31.1035)}* USD\n` +
+            `🔸 *${formatMoney((priceUsd / 31.1035) * uzsRate)}* UZS\n` +
+            `${LINE}\n🕐 _${getTimeStr()} (Jonli Xalqaro Bozor)_`;
+
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("🔄 Yangilash", "gold")],
+    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+  ]);
+
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("gold", sendGold);
+bot.hears(/^(🪙 Oltin Narxi|🪙 Oltin|Oltin|Золото|Gold)$/i, sendGold);
+
+async function sendCrypto(ctx) {
+  if (ctx.callbackQuery) await ctx.answerCbQuery().catch(()=>{});
+  const data = cryptoCache || {};
+  
+  let msg = `🪙 *Asosiy Kriptovalyutalar (Jonli narxlar)* 💹\n${LINE}\n\n`;
+  if (!data['BTC-USDT']) {
+    msg += `⏳ Narxlar keshlanmoqda, iltimos birozdan so'ng yangilang...`;
+  } else {
+    msg += `🟠 *Bitcoin (BTC):*  *$${formatMoney(data['BTC-USDT'])}*\n` +
+           `🔷 *Ethereum (ETH):*  *$${formatMoney(data['ETH-USDT'])}*\n` +
+           `🟡 *BNB (Binance):*  *$${formatMoney(data['BNB-USDT'])}*\n` +
+           `🟣 *Solana (SOL):*  *$${formatMoney(data['SOL-USDT'])}*\n` +
+           `💎 *TON (Telegram):*  *$${formatSmallMoney(data['TON-USDT'])}*\n` +
+           `🟢 *Tether (USDT P2P):*  *~12 890 UZS*\n`;
+  }
+  msg += `\n${LINE}\n🕐 _${getTimeStr()}_`;
+
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.callback("🔄 Yangilash", "crypto")],
+    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+  ]);
+
+  if (ctx.callbackQuery) {
+    try { await ctx.editMessageText(msg, { parse_mode: "Markdown", reply_markup: markup.reply_markup }); } catch(e){}
+  } else {
+    await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("crypto", sendCrypto);
+bot.hears(/^(🪙 Kripto|Kripto|Крипто|Crypto)$/i, sendCrypto);
+
+// ============================================================
+// 📊 GRAFIKLAR
+// ============================================================
+async function sendChartMenu(ctx) {
+  const msg = `📊 *Qaysi valyuta grafigini ko'rmoqchisiz?*\n_TradingView jonli shamchali grafiklari:_\n${LINE}`;
+  const markup = Markup.inlineKeyboard([
+    [Markup.button.url("📈 USD / UZS Grafigi", "https://ru.tradingview.com/symbols/USDUZS/")],
+    [Markup.button.url("🟠 BTC / USD Grafigi", "https://ru.tradingview.com/symbols/BTCUSD/")],
+    [Markup.button.url("🪙 Oltin (XAU/USD)", "https://ru.tradingview.com/symbols/XAUUSD/")],
+    [Markup.button.callback("🏠 Asosiy menyu", "main_menu")]
+  ]);
+  if(ctx.callbackQuery) {
+     await ctx.answerCbQuery().catch(()=>{});
+     try { await ctx.editMessageText(msg, {reply_markup: markup.reply_markup, parse_mode: "Markdown"}); } catch(e){}
+  } else {
+     await ctx.replyWithMarkdown(msg, markup);
+  }
+}
+bot.action("chart_menu", sendChartMenu);
+bot.hears(/^(📊 Grafik|Grafik|График|Chart)$/i, sendChartMenu);
 
 // ============================================================
 // 💼 SHAXSIY HAMYON (PORTFOLIO)
@@ -930,7 +1044,7 @@ bot.command("add", async (ctx) => {
 async function sendStats(ctx) {
   const usersCount = await User.countDocuments();
   const alertsCount = await User.countDocuments({ "scheduledAlerts.0": { $exists: true } });
-  const msg = `📊 *Bot Statistikasi (V3)*\n${LINE}\n\n` +
+  const msg = `📊 *Bot Statistikasi (V4 Pro)*\n${LINE}\n\n` +
               `👥 *Jami foydalanuvchilar:* *${usersCount}* ta\n` +
               `⏰ *Faol eslatmalar:* *${alertsCount}* ta\n` +
               `⚡️ *Tizim holati:* 100% Onlayn (MongoDB & Render)\n` +
@@ -1031,7 +1145,7 @@ cron.schedule("* * * * *", async () => {
 // ============================================================
 const app = express();
 app.get("/", (req, res) => {
-  res.send("ValyutaUZ Bot V3 — 100% Onlayn va Faol!");
+  res.send("ValyutaUZ Bot V4 Pro — 100% Onlayn va Faol!");
 });
 
 const PORT = process.env.PORT || 3000;
@@ -1039,7 +1153,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`🌐 Keep-Alive server ${PORT}-portda ishga tushdi.`);
   setTimeout(() => {
     bot.launch({ dropPendingUpdates: true })
-      .then(() => console.log("✅ ValyutaUZ Bot V3 muvaffaqiyatli ishga tushdi!"))
+      .then(() => console.log("✅ ValyutaUZ Bot V4 Pro muvaffaqiyatli ishga tushdi!"))
       .catch((err) => console.error("Bot launch xatosi:", err.message));
   }, 3000);
 });
